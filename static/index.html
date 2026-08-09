@@ -53,6 +53,15 @@
   .fired{color:var(--warn)}
   .pill{font:12px var(--mono);padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
   .rec{background:var(--block);color:#fff}
+  /* onboarding */
+  .bubble{background:#0b0f14;border:1px solid var(--line);border-radius:14px 14px 14px 4px;
+          padding:14px 16px;max-width:640px;font-size:16px}
+  .chips{display:flex;gap:9px;flex-wrap:wrap;margin-top:10px}
+  .chip{background:transparent;color:var(--ink);border:1px solid var(--line);
+        border-radius:999px;padding:9px 16px;font-size:16px;cursor:pointer}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip .en{color:var(--dim);font-size:12px;margin-left:7px}
+  .chip.on{border-color:var(--ok);color:var(--ok)}
 </style>
 </head>
 <body>
@@ -64,20 +73,39 @@
 </header>
 
 <main>
+  <!-- 0:00 — onboarding. One tap: the message is already written. -->
+  <section class="wide" id="onboardSection">
+    <h2>0 · Start</h2>
+    <div class="bubble">Hi, I'm HAQ. I help you complain to banks and public offices —
+      and I tell you when a complaint would be thrown out.</div>
+    <div class="row" style="margin-top:12px">
+      <input id="prefillIn" value="">
+      <button id="prefillBtn">Send ▶</button>
+    </div>
+    <div id="langBox" style="margin-top:16px"></div>
+  </section>
+
   <!-- 0:40 — Sunita speaks -->
   <section>
     <h2>1 · Voice intake</h2>
     <div class="row">
-      <button id="recBtn">● Record</button>
-      <span class="muted" id="recStatus">Speak your grievance. Keep it under 30 seconds.</span>
+      <button id="recBtn" disabled>● Record</button>
+      <span class="muted" id="recStatus">Choose a language first.</span>
     </div>
     <div style="margin-top:14px">
-      <input id="textIn" placeholder="…or type it here (no microphone needed)">
+      <input id="textIn" placeholder="…or type it here (no microphone needed)" disabled>
       <div class="row" style="margin-top:10px">
-        <button class="ghost" id="textBtn">Submit text</button>
+        <button class="ghost" id="textBtn" disabled>Submit text</button>
+        <label class="ghost" id="docLabel"
+               style="border:1px solid var(--line);border-radius:8px;padding:11px 18px;
+                      font-size:15px;cursor:pointer;opacity:.4">
+          📄 Send the bank's letter
+          <input type="file" id="docIn" accept="image/*,.pdf" style="display:none" disabled>
+        </label>
       </div>
     </div>
     <div id="intakeOut" style="margin-top:16px"></div>
+    <div id="docOut" style="margin-top:12px"></div>
   </section>
 
   <!-- 1:30 — Interrogation -->
@@ -142,6 +170,71 @@ fetch('/api/health').then(r=>r.json()).then(h=>{
   $('#mode').textContent = 'mode: ' + h.mode + (h.whatsapp ? ' · whatsapp on' : '');
 }).catch(()=>{});
 
+// ---- 0. onboarding ---------------------------------------------------------
+// The message is written for her. Her whole first action is pressing send.
+let languages = [];
+fetch('/api/languages').then(r=>r.json()).then(d=>{
+  languages = d.languages;
+  $('#prefillIn').value = d.prefill;
+}).catch(()=>{});
+
+$('#prefillBtn').onclick = async () => {
+  $('#prefillBtn').disabled = true;
+  try {
+    const d = await jpost('/api/start', {});
+    caseId = d.case_id;
+    $('#caseTag').textContent = 'case ' + caseId;
+    languages = d.languages;
+    renderLanguages();
+  } catch(e){ $('#langBox').textContent = 'Failed: ' + e.message; $('#prefillBtn').disabled = false; }
+};
+
+function renderLanguages(){
+  $('#langBox').innerHTML =
+    `<div class="bubble">Choose your language / भाषा निवडा</div>
+     <div class="chips">${languages.map(l =>
+       `<button class="chip" data-code="${l.code}">${escapeHtml(l.native)}<span class="en">${l.english}</span></button>`
+     ).join('')}</div>`;
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.onclick = () => pickLanguage(chip.dataset.code, chip);
+  });
+}
+
+async function pickLanguage(code, chip){
+  const r = await jpost('/api/onboard', {case_id: caseId, language: code});
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  chip.classList.add('on');
+  $('#langBox').insertAdjacentHTML('beforeend',
+    `<div class="bubble" style="margin-top:12px">${escapeHtml(r.greeting)}</div>`);
+  // Intake is locked until a language exists — we never guess one.
+  ['recBtn','textIn','textBtn','docIn'].forEach(id => $('#'+id).disabled = false);
+  $('#docLabel').style.opacity = 1;
+  $('#recStatus').textContent = 'Speak your grievance. Keep it under 30 seconds.';
+}
+
+// ---- document intake (Sarvam Doc AI) ---------------------------------------
+$('#docIn').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file || !caseId) return;
+  $('#docOut').innerHTML = '<span class="muted">Reading your document…</span>';
+  const fd = new FormData();
+  fd.append('document', file);
+  fd.append('case_id', caseId);
+  try {
+    const d = await api('/api/document', {method:'POST', body:fd});
+    const known = Object.entries(d.facts || {}).map(([k,v]) =>
+      `<div><span class="mono">${k}</span><span>${escapeHtml(String(v))}</span></div>`).join('');
+    // Low-confidence fields are asked about, never written in silently.
+    const ask = (d.confirm || []).map(c =>
+      `<div><span class="mono pending">${c.field}</span>
+        <span class="pending">${escapeHtml(String(c.value))} —
+        ${c.confidence == null ? 'unsure' : (c.confidence*100).toFixed(0)+'% confident, confirm?'}</span></div>`
+    ).join('');
+    $('#docOut').innerHTML =
+      `<div class="muted">${escapeHtml(d.summary || '')}</div><div class="facts">${known}${ask}</div>`;
+  } catch(err){ $('#docOut').textContent = 'Could not read that: ' + err.message; }
+};
+
 function setCase(data){
   caseId = data.case_id;
   $('#caseTag').textContent = 'case ' + caseId;
@@ -172,6 +265,7 @@ $('#recBtn').onclick = async () => {
     const fd = new FormData();
     fd.append('audio', new Blob(chunks, {type:'audio/webm'}), 'audio.webm');
     fd.append('lang', 'unknown');
+    fd.append('case_id', caseId);
     try {
       setCase(await api('/api/intake', {method:'POST', body:fd}));
       $('#recStatus').textContent = 'Done.';
@@ -186,7 +280,7 @@ $('#recBtn').onclick = async () => {
 $('#textBtn').onclick = async () => {
   const text = $('#textIn').value.trim();
   if (!text) return;
-  try { setCase(await jpost('/api/intake_text', {text})); }
+  try { setCase(await jpost('/api/intake_text', {text, case_id: caseId})); }
   catch(e){ $('#intakeOut').textContent = 'Failed: ' + e.message; }
 };
 
@@ -261,15 +355,19 @@ $('#draftBtn').onclick = async () => {
       <a href="${d.pdf_url}" target="_blank">Download PDF</a></div>
      ${stripped}
      <pre style="margin-top:12px">${escapeHtml(d.body_text)}</pre>
-     <div class="muted" style="margin-top:8px">Sources: ${
-       d.citations.map(c=>`<a href="${c.source_url}" target="_blank">${c.id}</a>`).join(' · ') || 'none'}</div>`;
+     <div class="muted" style="margin-top:8px">Cited (verified): ${
+       d.citations.map(c=>`<a href="${c.source_url}" target="_blank">${c.id}</a>`).join(' · ') || 'none'}</div>
+     ${(d.web_context && d.web_context.length) ? `<div class="muted" style="margin-top:6px">
+       Background reading — <b>not cited, not verified</b>: ${
+       d.web_context.map(w=>`<a href="${w.url}" target="_blank">${escapeHtml(w.title)}</a>`).join(' · ')}</div>` : ''}`;
   $('#speakBtn').disabled = false; $('#approveBtn').disabled = false;
 };
 
 $('#speakBtn').onclick = async () => {
   $('#speakBtn').textContent = '…';
   try {
-    const r = await jpost('/api/speak', {text: draftText, lang: 'mr-IN'});
+    // Language comes from the case, not hardcoded here.
+    const r = await jpost('/api/speak', {text: draftText, case_id: caseId});
     const player = $('#player');
     player.src = 'data:audio/wav;base64,' + r.audio_base64;
     player.style.display = 'block';

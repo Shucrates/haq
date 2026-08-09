@@ -64,6 +64,16 @@ def _post(path: str, *, bearer: bool = False, **kwargs) -> dict:
         return response.json()
 
 
+def _get(path: str, *, ok_statuses: tuple[int, ...] = (200,), **kwargs) -> dict:
+    """GET helper for the Doc AI job endpoints. `ok_statuses` lets the caller treat
+    409 (results requested before the job is terminal) as a normal outcome."""
+    with httpx.Client(timeout=TIMEOUT) as client:
+        response = client.get(f"{BASE_URL}{path}", headers=_headers(), **kwargs)
+        if response.status_code not in ok_statuses and response.status_code >= 400:
+            raise RuntimeError(f"Sarvam {path} -> {response.status_code}: {response.text[:400]}")
+        return response.json()
+
+
 # ---------------------------------------------------------------- C1: voice in
 
 

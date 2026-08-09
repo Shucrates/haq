@@ -21,20 +21,31 @@ from pathlib import Path
 from fpdf import FPDF
 
 import sarvam
+import sources
 
 DATA = Path(__file__).parent / "data"
 PDF_DIR = DATA / "drafts"
 STATUTES = json.loads((DATA / "statutes.json").read_text())
+
+# Below this many verified snippets, reach for Tier B context.
+MIN_CITABLE_BEFORE_WEB = 2
 
 DRAFT_PROMPT = """You draft formal complaint letters for Indian consumers.
 
 Write ONLY the body of the letter — no address block, no date, no subject line, no
 signature. Three or four short paragraphs, plain factual tone, first person.
 
-You may cite ONLY the statute snippets provided. Quote them by their id in square
-brackets, like [rbi_bsbda_no_amc], immediately after the sentence they support.
-Never state a rule, section number or scheme name that is not in the provided
-snippets. If you have no snippet for a point, make the point without a citation."""
+You will be given two blocks of material and they are NOT equivalent:
+
+  CITABLE — human-verified. Cite these by id in square brackets, like
+            [rbi_bsbda_no_amc], immediately after the sentence they support.
+
+  CONTEXT — retrieved from government websites but NOT verified. It may inform how
+            you phrase things. You must NEVER cite it, quote a section number from
+            it, or present it as settled law.
+
+Never state a rule, section number or scheme name that is not in CITABLE. If you
+have no citable snippet for a point, make the point without a citation."""
 
 
 @dataclass(frozen=True)
@@ -105,7 +116,16 @@ def build_body(case: dict, verdict, tier: int) -> dict:
     )
     retrieved = retrieve(query)
 
+    # Tier B only when the verified corpus is thin. This keeps the common path
+    # offline and fast, and means the rehearsed demo case never hits the network.
+    web_sources: list = []
+    if len(retrieved) < MIN_CITABLE_BEFORE_WEB:
+        web_sources = sources.context_for(query)
+
     snippets = "\n".join(f"[{r.id}] {r.text} (source: {r.source_url})" for r in retrieved)
+    web_block = "\n".join(
+        f"- {w.text} (unverified, from {w.url})" for w in web_sources
+    )
     context = (
         f"Grievance: {case.get('grievance_class')}\n"
         f"Institution: {facts.get('institution') or 'the bank'}\n"
@@ -115,7 +135,8 @@ def build_body(case: dict, verdict, tier: int) -> dict:
         f"Last response from the institution: {facts.get('last_communication_on') or 'none'}\n"
         f"Filing at tier {tier}.\n"
         f"What the person said: {case.get('transcript') or ''}\n\n"
-        f"Statute snippets you may cite:\n{snippets or '(none)'}"
+        f"CITABLE (human-verified — cite these by id):\n{snippets or '(none)'}\n\n"
+        f"CONTEXT (unverified, never cite):\n{web_block or '(none)'}"
     )
 
     try:
@@ -127,6 +148,8 @@ def build_body(case: dict, verdict, tier: int) -> dict:
     except Exception:
         raw = _fallback_body(case, facts, retrieved)
 
+    # NOTE: `retrieved` only — web_sources are deliberately NOT passed here, so any
+    # Tier B id the model emits falls outside the allowed set and gets deleted.
     grounded_body, stripped = validate_citations(raw, retrieved)
 
     # The filing goes out in formal English regardless of the language spoken.
@@ -144,6 +167,8 @@ def build_body(case: dict, verdict, tier: int) -> dict:
         ],
         "stripped": stripped,
         "grounded": not stripped,
+        # Shown to the user as background reading, clearly separated from citations.
+        "web_context": [w.as_dict() for w in web_sources],
     }
 
 

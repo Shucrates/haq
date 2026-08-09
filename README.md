@@ -52,7 +52,8 @@ pip install -r requirements.txt
 ### The only required secret
 
 ```bash
-SARVAM_API_KEY=sk_xxx
+SARVAM_API_KEY=sk_xxx      # required
+FIRECRAWL_API_KEY=fc_xxx   # optional — Tier B context only, see "Grounding"
 ```
 
 Everything else in `.env.example` has a working default. The key is **server-side only** —
@@ -106,6 +107,10 @@ the WhatsApp adapter reuses it instead of duplicating it.
 
 | Endpoint | Does |
 |---|---|
+| `GET /api/languages` | the eleven offered languages + the prefilled opening message |
+| `POST /api/start` | create a case; language is NULL until chosen |
+| `POST /api/onboard` | record the chosen language, return the greeting in it |
+| `POST /api/document` | read a letter with Doc AI, merge confident fields into the facts |
 | `POST /api/intake` | audio → transcript, language, classification, confidence |
 | `POST /api/intake_text` | same, for typing (no microphone needed) |
 | `POST /api/turn` | one question per turn, filling the fact sheet |
@@ -130,15 +135,42 @@ Every `Verdict` carries the `source_url` and `verified_on` of the ladder it used
 `blocked_by` is never empty when `maintainable` is false — each entry maps to a
 plain-language message a human can read.
 
-### Grounding
+### Grounding — two tiers
 
-Retrieval is keyword overlap over ~12 hand-verified statute snippets in
-`data/statutes.json`. No embeddings, no vector DB. At this scale that is more accurate
-than RAG and infinitely more debuggable.
+| Tier | Source | Citable in a filing? |
+|---|---|---|
+| **A** | `data/statutes.json`, human-verified | **Yes**, with `source_url` + `verified_on` |
+| **B** | Firecrawl, government domains only | **No** — background context only |
 
-Then `drafting.validate_citations()` deletes any citation lacking a `source_url`
-retrieved this session. The model literally cannot emit an ungrounded section number,
-because the renderer strips it.
+Tier A retrieval is keyword overlap over ~12 hand-verified snippets. No embeddings, no
+vector DB. At this scale that is more accurate than RAG and infinitely more debuggable.
+
+Tier B fires only when Tier A returns fewer than two snippets, so the common path never
+touches the network. `sources.search()` calls Firecrawl with `includeDomains` set to
+`sources.GOV_DOMAINS` — retrieval is restricted **at the API level**, not filtered
+afterwards — and `sources.extract_snippet()` uses 105B to reduce each page to one short
+statement.
+
+`drafting.validate_citations()` builds its allowed set from Tier A **only**. Tier B ids
+are never added, so any web-derived citation the model emits is deleted by the renderer
+that was already there. No new safety code — and it makes the Q&A answer stronger:
+
+> *"We do search the web — government domains only. And the renderer still deletes every
+> citation that isn't human-verified. Here's a draft where it stripped one."*
+
+`test_sources.py::test_web_citation_is_stripped_from_the_filing` asserts exactly this.
+If it goes red, that claim has become false — treat it as a release blocker.
+
+Promotion is how the corpus grows: a human reviews a Tier B snippet and writes it into
+`data/statutes.json` with their name in `verified_by`. Editorial work, not engineering.
+
+### Documents
+
+`POST /api/document`, or just send a photo of the letter on WhatsApp. Sarvam **Doc AI
+Extract** reads it — 22 Indian languages, scans and handwriting — and returns every field
+with a `confidence`. Fields above `documents.CONFIDENCE_THRESHOLD` become facts; anything
+below is **confirmed with the user**, never written in silently. A misread date would move
+a legal deadline, so the product asks.
 
 ---
 
@@ -206,12 +238,35 @@ Files to verify: `data/ladders/*.yaml`, `data/statutes.json`.
 
 ---
 
+## Onboarding
+
+The user's entire first action is pressing send — the message is already written.
+
+**WhatsApp:** a `wa.me` deep link carries the prefilled text (`onboarding.wa_link()`).
+Sending it returns an interactive language list; picking one stores it and greets in it.
+Put the link behind a QR code on the poster.
+
+**Web:** the first panel is a chat opener with the same prefilled sentence, then language
+chips from `GET /api/languages`.
+
+Both surfaces read `onboarding.py` so they cannot drift, and **`cases.language IS NULL`
+is the onboarding state** — no extra column, and nothing reaches the interrogation until
+a language exists. HAQ never guesses one.
+
+**Why eleven languages** when Saaras transcribes twenty-two: Bulbul speaks eleven. The
+thesis is that she approves a document she cannot read *by hearing it*, so a language we
+cannot speak back is one we should not offer as an interface. The other eleven remain
+available for transcription. `test_onboarding.py` asserts the offered set equals the
+speakable set.
+
 ## What is not built yet
 
 Answer this honestly in Q&A — judges trust teams that name their gaps, and "nothing" is
 never the right answer.
 
-- **Sarvam Doc AI / OCR** is not wired. Uploading a bank letter does nothing.
+- **No Sarvam call has run against the live API yet.** The client is written to the
+  verified specs and every path has a fallback, but until a key is present the code has
+  only ever exercised those fallbacks. Doc AI and Firecrawl are in the same position.
 - **Two ladders, not six.** RB-IOS and RTI.
 - **Precedent data is seeded**, not real. `data/precedent.json` says so in the file, and
   `sample_size` is 0 on every row.

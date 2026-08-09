@@ -19,8 +19,10 @@ from pydantic import BaseModel
 
 import agent
 import demo_cache
+import documents
 import drafting
 import ladder_engine
+import onboarding
 import sarvam
 import store
 from ladder_engine import Facts, load_ladders, resolve
@@ -111,22 +113,37 @@ def verdict_json(verdict) -> dict:
 
 
 @app.post("/api/intake")
-def intake(audio: UploadFile = File(...), lang: str = Form("unknown")):
-    """Voice in -> transcript, language, classification. Opens the demo."""
-    raw = audio.file.read()
-    heard = sarvam.stt(raw, filename=audio.filename or "audio.webm", language_code=lang)
+def intake(audio: UploadFile = File(...), lang: str = Form("unknown"),
+           case_id: str = Form(None)):
+    """Voice in -> transcript, language, classification. Opens the demo.
 
-    case_id = store.create_case(channel="web")
+    The chosen language wins; Saaras' detection is kept as a cross-check and
+    surfaced when the two disagree, rather than silently overriding the choice.
+    """
+    case = _case_or_404(case_id) if case_id else None
+    chosen = (case or {}).get("language")
+
+    raw = audio.file.read()
+    heard = sarvam.stt(
+        raw,
+        filename=audio.filename or "audio.webm",
+        language_code=chosen if chosen and lang == "unknown" else lang,
+    )
+
+    if case_id is None:
+        case_id = store.create_case(channel="web")
+
     classified = agent.classify(heard["transcript"])
 
     facts = {}
     if classified.get("institution"):
         facts["institution"] = classified["institution"]
 
+    language = chosen or heard["language_code"]
     store.update_case(
         case_id,
         transcript=heard["transcript"],
-        language=heard["language_code"],
+        language=language,
         grievance_class=classified["grievance_class"],
         facts=facts,
     )
@@ -135,7 +152,9 @@ def intake(audio: UploadFile = File(...), lang: str = Form("unknown")):
     return {
         "case_id": case_id,
         "transcript": heard["transcript"],
-        "language": heard["language_code"],
+        "language": language,
+        "detected_language": heard["language_code"],
+        "language_mismatch": bool(chosen and heard["language_code"] not in (chosen, "unknown")),
         "classification": classified["grievance_class"],
         "confidence": heard["confidence"],
     }
@@ -144,18 +163,38 @@ def intake(audio: UploadFile = File(...), lang: str = Form("unknown")):
 class TextIntake(BaseModel):
     text: str
     language: str | None = None
+    case_id: str | None = None
 
 
 @app.post("/api/intake_text")
 def intake_text(payload: TextIntake):
     """Same as /api/intake but for typed text — used by WhatsApp and by anyone
-    testing without a microphone."""
-    case_id = store.create_case(channel="web")
+    testing without a microphone.
+
+    A language must already be chosen. Passing one inline onboards the case in the
+    same call, which is what the tests and the WhatsApp adapter do.
+    """
+    if payload.case_id:
+        case = _case_or_404(payload.case_id)
+        case_id = payload.case_id
+    else:
+        case_id = store.create_case(channel="web")
+        case = store.get_case(case_id)
+
+    language = payload.language or case.get("language")
+    if not language:
+        # Never guess. An unonboarded case gets the picker, not an English default.
+        return JSONResponse(
+            status_code=409,
+            content={"needs_language": True, "case_id": case_id,
+                     "languages": onboarding.as_json()},
+        )
+
     classified = agent.classify(payload.text)
     store.update_case(
         case_id,
         transcript=payload.text,
-        language=payload.language or "en-IN",
+        language=language,
         grievance_class=classified["grievance_class"],
         facts={"institution": classified["institution"]} if classified.get("institution") else {},
     )
@@ -163,9 +202,50 @@ def intake_text(payload: TextIntake):
     return {
         "case_id": case_id,
         "transcript": payload.text,
-        "language": payload.language or "en-IN",
+        "language": language,
         "classification": classified["grievance_class"],
         "confidence": None,
+    }
+
+
+# ------------------------------------------------------------- 0. onboarding
+
+
+@app.get("/api/languages")
+def languages():
+    """Served so the UI never hardcodes a language list. These are exactly the
+    languages Bulbul can speak, because the read-back must never fail."""
+    return {"prefill": onboarding.PREFILL_TEXT, "languages": onboarding.as_json()}
+
+
+@app.post("/api/start")
+def start():
+    """First contact. Creates a case with no language yet — the picker comes next."""
+    case_id = store.create_case(channel="web")
+    return {
+        "case_id": case_id,
+        "prefill": onboarding.PREFILL_TEXT,
+        "languages": onboarding.as_json(),
+    }
+
+
+class Onboard(BaseModel):
+    case_id: str
+    language: str
+
+
+@app.post("/api/onboard")
+def onboard(payload: Onboard):
+    """Record the chosen language and hand back the first prompt in it."""
+    _case_or_404(payload.case_id)
+    if not onboarding.is_supported(payload.language):
+        raise HTTPException(status_code=400, detail=f"unsupported language {payload.language}")
+    store.update_case(payload.case_id, language=payload.language)
+    store.add_event(payload.case_id, "language", payload.language)
+    return {
+        "case_id": payload.case_id,
+        "language": payload.language,
+        "greeting": onboarding.greeting(payload.language),
     }
 
 
@@ -242,14 +322,54 @@ def draft(payload: DraftRequest):
     store.update_case(payload.case_id, draft_text=built["body_text"])
     store.add_event(payload.case_id, "draft", f"tier {tier}")
 
+    # Tier B is recorded against the case but kept out of the PDF and out of the
+    # citation list. It is shown to the user as background reading, clearly labelled
+    # unverified, and a human can later promote it into statutes.json.
+    if built.get("web_context"):
+        store.save_sources(payload.case_id, built["web_context"], case.get("transcript") or "")
+
     return {
         "body_text": built["body_text"],
         "citations": built["citations"],
         "stripped_citations": built["stripped"],
         "grounded": built["grounded"],
+        "web_context": built.get("web_context", []),
         "tier": tier,
         "tier_name": tier_name,
         "pdf_url": f"/api/draft/{payload.case_id}.pdf",
+    }
+
+
+@app.post("/api/document")
+def upload_document(document: UploadFile = File(...), case_id: str = Form(...)):
+    """Read a bank letter or RTI reply with Sarvam Doc AI and merge what it says
+    into the fact sheet — but only the fields it is confident about. Anything
+    below the threshold comes back for the user to confirm, because a wrong date
+    here silently changes which tier a complaint is maintainable at."""
+    case = _case_or_404(case_id)
+    raw = document.file.read()
+
+    try:
+        extracted = documents.extract(raw, document.filename or "document.pdf",
+                                      case.get("language"))
+    except Exception as exc:  # noqa: BLE001 — a bad scan must not close the case
+        store.save_document(case_id, document.filename, "failed", {"error": str(exc)})
+        return {"status": "failed", "facts": {}, "confirm": [],
+                "message": "I could not read that document. You can tell me the details instead."}
+
+    split = documents.to_facts(extracted)
+    store.save_document(case_id, document.filename, extracted.get("status", "unknown"), split["raw"])
+
+    if split["facts"]:
+        facts = {**case["facts"], **split["facts"]}
+        store.update_case(case_id, facts=facts)
+        store.add_event(case_id, "document", ", ".join(split["facts"]))
+
+    return {
+        "status": extracted.get("status"),
+        "facts": split["facts"],
+        "confirm": split["confirm"],
+        "summary": documents.summarise(extracted),
     }
 
 
@@ -266,16 +386,32 @@ def draft_pdf(case_id: str):
 
 class Speak(BaseModel):
     text: str
-    lang: str = "mr-IN"
+    case_id: str | None = None
+    lang: str | None = None
     speaker: str = "ritu"
 
 
 @app.post("/api/speak")
 def speak(payload: Speak):
     """Bulbul reads the English draft aloud in her language. She approves a document
-    she cannot read, by hearing it in one she can."""
-    audio_base64 = sarvam.tts(payload.text, language_code=payload.lang, speaker=payload.speaker)
-    return {"audio_base64": audio_base64}
+    she cannot read, by hearing it in one she can.
+
+    The language comes from the case, not from the caller. Hardcoding it here is how
+    a Hindi speaker ends up being read to in Marathi.
+    """
+    language = payload.lang
+    if not language and payload.case_id:
+        language = _case_or_404(payload.case_id).get("language")
+    language = language or "en-IN"
+
+    if not onboarding.is_supported(language):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{language} can be transcribed but not spoken; no read-back available",
+        )
+
+    audio_base64 = sarvam.tts(payload.text, language_code=language, speaker=payload.speaker)
+    return {"audio_base64": audio_base64, "language": language}
 
 
 class Approve(BaseModel):

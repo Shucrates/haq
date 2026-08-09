@@ -73,6 +73,33 @@ CREATE TABLE IF NOT EXISTS processed_messages (
     message_id TEXT PRIMARY KEY,
     at         TEXT NOT NULL
 );
+
+-- Tier B: retrieved from government websites, NOT human-verified. Kept separate
+-- from data/statutes.json on purpose — nothing in here may be cited in a filing
+-- until a human promotes it (promoted=1) and writes it into statutes.json.
+CREATE TABLE IF NOT EXISTS sources (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id     TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    title       TEXT,
+    snippet     TEXT NOT NULL,
+    query       TEXT,
+    provenance  TEXT NOT NULL DEFAULT 'web',
+    promoted    INTEGER NOT NULL DEFAULT 0,
+    retrieved_at TEXT NOT NULL,
+    UNIQUE (case_id, source_id)
+);
+
+-- What we read out of a document the user sent us.
+CREATE TABLE IF NOT EXISTS documents (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id    TEXT NOT NULL,
+    filename   TEXT,
+    status     TEXT NOT NULL,
+    extracted  TEXT NOT NULL DEFAULT '{}',
+    at         TEXT NOT NULL
+);
 """
 
 
@@ -243,6 +270,56 @@ def reset_phone(phone: str) -> str:
     with connect() as conn:
         conn.execute("DELETE FROM wa_sessions WHERE phone = ?", (phone,))
     return case_for_phone(phone)
+
+
+# -------------------------------------------------- tier B sources + documents
+
+
+def save_sources(case_id: str, web_sources: list, query: str = "") -> None:
+    """Record what we read off the web. Never merged into statutes.json — promotion
+    is a human act, and that is the whole point of keeping the tiers apart."""
+    with connect() as conn:
+        for s in web_sources:
+            conn.execute(
+                """INSERT INTO sources
+                       (case_id, source_id, url, title, snippet, query, provenance, retrieved_at)
+                   VALUES (?,?,?,?,?,?,?,?)
+                   ON CONFLICT (case_id, source_id) DO UPDATE SET snippet=excluded.snippet""",
+                (case_id, s["id"], s["url"], s.get("title"), s["text"], query,
+                 s.get("provenance", "web"), _now()),
+            )
+
+
+def sources_for(case_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT source_id, url, title, snippet, provenance, promoted FROM sources"
+            " WHERE case_id = ? ORDER BY id",
+            (case_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_document(case_id: str, filename: str | None, status: str, extracted: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO documents (case_id, filename, status, extracted, at) VALUES (?,?,?,?,?)",
+            (case_id, filename, status, json.dumps(extracted, default=str), _now()),
+        )
+
+
+def documents_for(case_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT filename, status, extracted, at FROM documents WHERE case_id = ? ORDER BY id",
+            (case_id,),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["extracted"] = json.loads(item["extracted"] or "{}")
+        out.append(item)
+    return out
 
 
 def already_processed(message_id: str) -> bool:
