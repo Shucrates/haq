@@ -1,0 +1,81 @@
+# RTI Act 2005 ladder. Its job is to prove the engine is general and not
+# hardcoded to one law: different tiers, different clock, different exclusions,
+# same resolve() function. Four fields, thirty minutes of work (PRD 3.4).
+# ---------------------------------------------------------------------------
+# VERIFY BEFORE DEMO: source_url and dates must be checked by a named human.
+# ---------------------------------------------------------------------------
+
+ladder_id: rti_2005
+version: 2005.1
+name: Right to Information Act 2005
+effective_from: 2005-10-12
+source_url: https://rti.gov.in/
+verified_on: 2026-08-08
+verified_by: UNVERIFIED
+
+grievance_classes:
+  - rti
+
+target_tier: 2
+
+required_facts:
+  - tier1_written_complaint
+  - tier1_filed_on
+
+tiers:
+  - tier: 1
+    name: the Public Information Officer (PIO)
+    description: The original RTI application.
+  - tier: 2
+    name: the First Appellate Authority
+    description: Appeal when the PIO does not reply or refuses.
+  - tier: 3
+    name: the Central / State Information Commission
+    description: Second appeal.
+
+exclusions:
+  - id: tier1_not_exhausted
+    rule: tier1_not_exhausted
+    redirect_to: 1
+    message: >-
+      No RTI application has been filed yet. A first appeal only exists as an appeal
+      against a PIO's decision or silence.
+
+  - id: pio_period_not_elapsed
+    rule: waiting_period_not_elapsed
+    wait_days: 30
+    redirect_to: 1
+    message: >-
+      The PIO has 30 days to respond. Until that period lapses there is nothing to
+      appeal against.
+
+  - id: first_appeal_time_barred
+    rule: time_barred
+    window_days: 30
+    redirect_to: null
+    message: >-
+      A first appeal must be filed within 30 days of the PIO's decision. That window
+      has closed.
+
+deadlines:
+  - id: pio_reply_due
+    label: PIO's 30-day deadline to respond
+    from: tier1_filed_on
+    days: 30
+    tier: 1
+  - id: first_appeal_window
+    label: Last day to file the first appeal
+    from: later_of_filed_and_last_communication
+    days: 30
+    tier: 2
+
+citations:
+  - id: rti_s7_thirty_days
+    text: >-
+      Section 7(1) of the Right to Information Act 2005 requires a Public Information
+      Officer to dispose of a request within thirty days of receipt.
+    source_url: https://rti.gov.in/
+    verified_on: 2026-08-08
+
+scoring:
+  material_amount_inr: 0
