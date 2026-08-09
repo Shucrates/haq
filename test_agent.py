@@ -72,6 +72,63 @@ def test_hitting_the_turn_cap_reports_what_is_still_missing(monkeypatch):
     assert "commercial_decision" in step["facts_pending"]
 
 
+# ------------------------------------------------------------------ guidance
+
+
+@pytest.mark.parametrize("text,intent", [
+    ("bank ne mere account se paise kaat liye", "grievance"),  # a keyword fires
+    ("mala loan sathi arj karaycha aahe", "question"),         # nothing to escalate
+])
+def test_the_keyword_fallback_still_picks_an_intent(text, intent):
+    """The fallback runs when 105B is unreachable. Marching someone who asked how to
+    apply for a loan through a six-question interrogation is the bug it must avoid."""
+    assert agent._classify_by_keyword(text)["intent"] == intent
+
+
+@pytest.fixture
+def guidance(monkeypatch):
+    """Answer with whatever the test wants 105B to have said, and keep Tier B off
+    the network."""
+    monkeypatch.setattr(agent.sources, "context_for", lambda *a, **k: [])
+
+    def reply(text):
+        monkeypatch.setattr(agent.sarvam, "chat", lambda *a, **k: text)
+
+    return reply
+
+
+def test_guidance_deletes_an_invented_section_number(guidance):
+    """The grounding guarantee is code, not a prompt: an answer about which documents
+    a bank wants may be general, but it may not invent law."""
+    guidance("You need Aadhaar and PAN. Section 12(4) of the Banking Act guarantees "
+             "a loan within thirty days.")
+
+    out = agent.answer_question("what documents do I need for a home loan", "en-IN")
+
+    assert "Aadhaar" in out
+    assert "Section 12(4)" not in out, "an uncited numbered rule must not survive"
+
+
+def test_guidance_deletes_a_borrowed_citation_id(guidance):
+    """Tier B ids are never in the allowed set, so a model that cites a web page it
+    read gets the marker deleted rather than the claim dressed up as verified."""
+    guidance("Banks usually ask for proof of income [web_rbi_org_in_some_page].")
+
+    out = agent.answer_question("what documents do I need", "en-IN")
+
+    assert "web_rbi_org_in_some_page" not in out
+
+
+def test_guidance_falls_back_rather_than_answering_from_nothing(monkeypatch):
+    agent.localise.cache_clear()
+    monkeypatch.setattr(agent.sources, "context_for", lambda *a, **k: [])
+    monkeypatch.setattr(agent.sarvam, "chat", lambda *a, **k: "Section 9 says you get a loan.")
+
+    out = agent.answer_question("do I get a loan", "en-IN")
+
+    assert out == agent.GUIDANCE_FALLBACK, "an answer stripped to nothing is not an answer"
+
+
 # ------------------------------------------------------------------ localise
 
 

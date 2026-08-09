@@ -22,6 +22,7 @@ from functools import lru_cache
 
 import onboarding
 import sarvam
+import sources
 import store
 
 log = logging.getLogger("haq.agent")
@@ -69,9 +70,35 @@ FACT_TYPES = {
     "institution": "text",
 }
 
-CLASSIFY_PROMPT = """You classify Indian consumer grievances. Reply with ONLY a JSON object:
-{"grievance_class": "<one of: banking/unauthorised_charge, banking/unauthorised_debit, banking/service_deficiency, rti/no_response, other>", "institution": "<name or null>"}
+CLASSIFY_PROMPT = """You classify what an Indian consumer wants. Reply with ONLY a JSON object:
+{"intent": "<grievance|question>", "grievance_class": "<one of: banking/unauthorised_charge, banking/unauthorised_debit, banking/service_deficiency, rti/no_response, other>", "institution": "<name or null>"}
+
+intent is "grievance" when something has already gone wrong and they want it put right.
+intent is "question" when they are asking how something works, what a bank or a loan
+requires, which documents they need, or how to apply — nothing has gone wrong yet.
 No prose, no markdown fence."""
+
+GUIDANCE_PROMPT = """You answer practical questions about Indian banking, loans, and the
+documents they need, for a person who may have had little schooling.
+
+Answer in the language named, in that language's own script. Under 90 words, plain
+sentences, a short list only where a list is genuinely clearer.
+
+You are given two blocks of material and they are NOT equivalent:
+
+  VERIFIED — human-checked. You may state these as rules and cite them by id in square
+             brackets, like [rbi_bsbda_no_amc], right after the sentence they support.
+
+  CONTEXT  — read from an official government website but NOT checked. It may inform
+             how you answer. Never cite it, never quote a section number from it, and
+             never present it as settled law.
+
+Never state a rule, section number, interest rate, fee, or eligibility figure that is
+not in VERIFIED. Say what is generally asked for and tell them to confirm the exact
+list with their bank. Never promise that a loan or an application will be approved.
+
+If it sounds like something has already gone wrong, end by telling them they can
+describe it and you will help them complain."""
 
 QUESTION_PROMPT = """You are helping a person in India escalate a grievance. You already know
 some facts and need exactly ONE more.
@@ -153,7 +180,9 @@ def _language_name(code: str | None) -> str:
 
 
 def classify(transcript: str) -> dict:
-    """Grievance class + institution. Falls back to keyword rules on any failure."""
+    """Intent + grievance class + institution. One call, because the interrogation
+    and the guidance path fork on the answer and a second round trip would be a
+    second chance to fail. Falls back to keyword rules on any failure."""
     try:
         raw = sarvam.chat(
             [
@@ -164,7 +193,9 @@ def classify(transcript: str) -> dict:
         )
         out = _first_json(raw)
         grievance = out.get("grievance_class") or "other"
-        return {"grievance_class": grievance, "institution": out.get("institution")}
+        intent = "question" if out.get("intent") == "question" else "grievance"
+        return {"intent": intent, "grievance_class": grievance,
+                "institution": out.get("institution")}
     except Exception:
         return _classify_by_keyword(transcript)
 
@@ -179,7 +210,86 @@ def _classify_by_keyword(transcript: str) -> dict:
         grievance = "banking/service_deficiency"
     else:
         grievance = "other"
-    return {"grievance_class": grievance, "institution": None}
+    # No keyword recognised anything to escalate, so treat it as a question rather
+    # than march someone who asked how to apply for a loan through an interrogation.
+    return {"intent": "grievance" if grievance != "other" else "question",
+            "grievance_class": grievance, "institution": None}
+
+
+# --------------------------------------------------------------- ANSWERING
+
+
+# Enough of the answer to be useful in a chat, short enough to read on a phone.
+GUIDANCE_MAX_TOKENS = 400
+
+
+def answer_question(question: str, language: str | None) -> str:
+    """Answer a banking or loan question that is not a grievance.
+
+    "I want to apply for a loan" is not a complaint, so it classified as `other`,
+    matched no ladder, and came back as no_ladder_for_grievance — a refusal to a
+    person who had not asked for anything to be filed. This is the other half of the
+    product: most people arrive with a question, and some of them turn out to have a
+    grievance underneath it.
+
+    Grounded exactly the way a filing is (PRD 3.5), and for the same reason — this
+    is money advice to someone who may act on it:
+
+      Tier A  data/statutes.json, human-verified   -> may be stated and cited
+      Tier B  gov domains via sources.py           -> may inform, never cited
+
+    validate_citations() is the enforcement, not the prompt: it is handed the Tier A
+    snippets only, so any id the model invents or borrows from Tier B is deleted,
+    and any sentence stating a numbered rule without a surviving citation goes with
+    it. An answer about which documents a bank asks for is allowed to be general;
+    it is not allowed to invent a section number.
+    """
+    import drafting  # local: drafting pulls in fpdf, and the interrogation never needs it
+
+    retrieved = drafting.retrieve(question)
+    web = sources.context_for(question) if not retrieved else []
+
+    verified = "\n".join(f"[{r.id}] {r.text} (source: {r.source_url})" for r in retrieved)
+    context = "\n".join(f"- {w.text} (unverified, from {w.url})" for w in web)
+
+    try:
+        raw = sarvam.chat(
+            [
+                {"role": "system", "content": GUIDANCE_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Question: {question}\n"
+                        f"Answer in: {_language_name(language)}\n\n"
+                        f"VERIFIED (may be cited by id):\n{verified or '(none)'}\n\n"
+                        f"CONTEXT (never cite):\n{context or '(none)'}"
+                    ),
+                },
+            ],
+            max_tokens=GUIDANCE_MAX_TOKENS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("guidance_failed: %s", exc)
+        return localise(GUIDANCE_FALLBACK, language)
+
+    cleaned, _, _ = drafting.validate_citations(raw, retrieved)
+    if not cleaned.strip():
+        return localise(GUIDANCE_FALLBACK, language)
+
+    # Whatever survived the validator is verified, so its source is worth showing.
+    # The markers themselves are noise in a chat message — the URL is the proof.
+    cited = {c for c in drafting.CITATION_MARKER.findall(cleaned)}
+    body = drafting.CITATION_MARKER.sub("", cleaned).strip()
+    for r in retrieved:
+        if r.id in cited:
+            body += f"\n{r.source_url}"
+    return body
+
+
+GUIDANCE_FALLBACK = (
+    "I could not look that up just now. Tell me what went wrong with your bank and "
+    "I will help you complain about it."
+)
 
 
 # -------------------------------------------------------------- COLLECTING

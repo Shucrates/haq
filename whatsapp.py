@@ -306,6 +306,12 @@ def _handle_language(phone: str, case_id: str, action: str | None) -> None:
     send_language_list(phone, rows)
 
 
+# What HAQ can actually escalate: the ladders in data/ladders, and nothing else.
+OUT_OF_SCOPE = (
+    "I can only take this further for complaints against a bank, or an RTI request "
+    "that got no reply. Tell me if you have one of those and I will help."
+)
+
 APPROVE = "APPROVE"
 REJECT = "REJECT"
 
@@ -402,6 +408,19 @@ def _advance_case(phone: str, text: str) -> None:
     # First contact on this case: classify, then start interrogating.
     if not case.get("grievance_class"):
         classified = agent.classify(text)
+
+        # Nothing has gone wrong yet — she is asking how a loan works or which
+        # documents a bank wants. Answer it. grievance_class is deliberately left
+        # unset so the next message is classified fresh: most people ask a question
+        # first and describe the actual problem second.
+        if classified.get("intent") == "question":
+            store.add_message(case_id, "user", text)
+            answer = agent.answer_question(text, case.get("language"))
+            send_text(phone, answer)
+            store.add_message(case_id, "assistant", answer)
+            store.add_event(case_id, "guidance", classified.get("grievance_class") or "other")
+            return
+
         store.update_case(
             case_id,
             transcript=text,
@@ -429,10 +448,21 @@ def _advance_case(phone: str, text: str) -> None:
     store.save_deadlines(case_id, verdict.deadlines)
 
     if not verdict.maintainable:
-        reason = agent.phrase_refusal(verdict, case.get("language"))
         blocked = ", ".join(verdict.blocked_by)
-        send_text(phone, f"{reason}\n\n_Blocked: {blocked}_\n{verdict.source_url}")
         store.add_event(case_id, "refusal", blocked)
+
+        # No ladder is not a legal refusal, it is the edge of what HAQ covers. Saying
+        # "we have no verified escalation ladder" to someone with an insurance
+        # problem answers a question they did not ask.
+        if verdict.blocked_by == ["no_ladder_for_grievance"]:
+            _say(phone, case_id, OUT_OF_SCOPE)
+            return
+
+        reason = agent.phrase_refusal(verdict, case.get("language"))
+        # The rule id is for us. It was going out to every user as `Blocked:
+        # tier1_not_exhausted`, which is a variable name, not a sentence.
+        tail = f"\n\n_Blocked: {blocked}_" if os.getenv("HAQ_DEBUG") == "1" else ""
+        send_text(phone, f"{reason}{tail}\n{verdict.source_url}")
         return
 
     built = drafting.build_body(case, verdict, verdict.current_tier)

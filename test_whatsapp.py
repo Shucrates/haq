@@ -190,6 +190,41 @@ def test_ambiguous_reply_re_asks_instead_of_approving(drafted, sent):
     assert sent[-1][0] == "buttons"
 
 
+def test_a_question_is_answered_not_interrogated(sent, monkeypatch):
+    """The screenshot bug: "I want to apply for a loan" classified as `other`, matched
+    no ladder, and came back as no_ladder_for_grievance — a refusal to someone who had
+    not asked for anything to be filed."""
+    monkeypatch.setattr(whatsapp.agent, "classify",
+                        lambda text: {"intent": "question", "grievance_class": "other",
+                                      "institution": None})
+    monkeypatch.setattr(whatsapp.agent, "answer_question",
+                        lambda text, language: "You will need Aadhaar and PAN.")
+
+    case_id = store.case_for_phone("91777")
+    store.update_case(case_id, language="mr-IN")
+    whatsapp._advance_case("91777", "मला लोन साठी अर्ज करायचा आहे")
+
+    assert sent[-1][2] == "You will need Aadhaar and PAN."
+    assert store.get_case(case_id)["grievance_class"] is None, \
+        "a question must not lock the case into a grievance class"
+
+
+def test_an_uncovered_grievance_gets_the_scope_message_not_a_rule_id(sent, monkeypatch):
+    """`Blocked: no_ladder_for_grievance` is a variable name. It was going out to
+    users."""
+    monkeypatch.setattr(whatsapp.agent, "classify",
+                        lambda text: {"intent": "grievance", "grievance_class": "other",
+                                      "institution": None})
+
+    case_id = store.case_for_phone("91888")
+    store.update_case(case_id, language="mr-IN")
+    whatsapp._advance_case("91888", "my insurance claim was rejected")
+
+    body = sent[-1][2]
+    assert body == whatsapp.OUT_OF_SCOPE
+    assert "no_ladder_for_grievance" not in body
+
+
 def test_what_haq_says_is_translated_before_it_is_sent(drafted, sent, localised):
     """The gap this closes: the questions were in Marathi and everything around them
     — the confirmation, the approval prompt, the deadline list — was in English."""
