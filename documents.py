@@ -74,9 +74,30 @@ FACT_MAP = {
 }
 
 
+# Doc AI accepts PDF, PNG, JPG and ZIP, and it reads the part's declared content
+# type. "application/octet-stream" is not on that list — it is what a 422
+# invalid-file-format looks like from our side.
+MIME_BY_SUFFIX = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".zip": "application/zip",
+}
+DEFAULT_MIME = "image/jpeg"  # WhatsApp photos arrive as .jpg
+
+
+def _mime_for(filename: str) -> str:
+    suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    return MIME_BY_SUFFIX.get(suffix, DEFAULT_MIME)
+
+
 def _submit(file_bytes: bytes, filename: str, language: str | None) -> str:
-    files = {"file": (filename, file_bytes, "application/octet-stream")}
-    data = {"schema": json.dumps(EXTRACT_SCHEMA)}
+    files = {"file": (filename, file_bytes, _mime_for(filename))}
+    # output_format is json for Extract; sent explicitly rather than relying on the
+    # default. Note the field is `language`, not `language_code` — Doc AI differs
+    # from the STT and translate endpoints here, and silently ignores the wrong one.
+    data = {"schema": json.dumps(EXTRACT_SCHEMA), "output_format": "json"}
     if language:
         data["language"] = language
     out = sarvam._post("/doc-ai/v1/job/extract", files=files, data=data)
