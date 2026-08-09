@@ -97,6 +97,34 @@ def is_greeting(text: str | None) -> bool:
     return _SQUEEZE.sub(r"\1", word) in _GREETING_WORDS
 
 
+# "Send it as a voice note" — in the eleven languages we speak back in. Substrings,
+# so inflections and the nukta variants ("आवाज़", "ਆਵਾਜ਼") match the base form here.
+# Latin first: half of these users type Hinglish even when they speak Marathi.
+_VOICE_WORDS = (
+    "voice", "audio", "awaaz", "awaz", "aawaj", "sunao", "sunau", "bol ke", "bolke",
+    "आवाज", "व्हॉइस", "वॉइस", "ऑडिओ", "ऑडियो", "ऐकव", "सुनाओ", "बोलून",   # mr, hi
+    "ভয়েস", "অডিও",          # bn
+    "குரல்", "ஆடியோ",         # ta
+    "వాయిస్", "ఆడియో",        # te
+    "ಧ್ವನಿ", "ಆಡಿಯೋ",         # kn
+    "વોઇસ", "ઓડિયો", "અવાજ",  # gu
+    "ശബ്ദ", "ഓഡിയോ",          # ml
+    "ਆਵਾਜ", "ਆਡੀਓ",          # pa
+    "ଅଡିଓ", "ଭଏସ",           # od
+)
+
+
+def wants_voice(text: str | None) -> bool:
+    """True when she asked to be answered in a voice note.
+
+    ponytail: bare keyword match, so "the bank gave me a voice call" also flips it
+    on. Harmless — she still gets the text — and cheaper than an LLM call on every
+    inbound message, which is what we would pay to tell the two apart.
+    """
+    lowered = (text or "").lower()
+    return any(word in lowered for word in _VOICE_WORDS)
+
+
 def by_code(code: str | None) -> Language | None:
     return BY_CODE.get(code or "")
 

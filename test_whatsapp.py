@@ -13,6 +13,7 @@ import pytest
 
 import agent
 import documents
+import onboarding
 import store
 import whatsapp
 
@@ -208,6 +209,79 @@ def test_the_poll_window_outlasts_a_real_loan_agreement():
     """Measured: 44 pages took 82s and Doc AI's own cap is 60 pages, so a legitimate
     loan agreement was timing out and being reported as unreadable."""
     assert documents.POLL_TIMEOUT_SECONDS >= 120
+
+
+# ------------------------------------------------------- answer me in voice
+
+
+@pytest.mark.parametrize("text", [
+    "please send the answer in a voice note",
+    "मला व्हॉइस मध्ये उत्तर द्या",          # mr
+    "आवाज में भेजो",                        # hi
+    "ভয়েসে পাঠান",                          # bn
+    "குரல் மூலம் அனுப்பவும்",                 # ta
+    "వాయిస్ లో పంపండి",                      # te
+    "ಧ್ವನಿ ಮೂಲಕ ಕಳುಹಿಸಿ",                    # kn
+    "વોઇસ મા મોકલો",                        # gu
+    "ഓഡിയോ ആയി അയക്കൂ",                     # ml
+    "ਆਵਾਜ਼ ਵਿੱਚ ਭੇਜੋ",                        # pa, with the nukta
+    "ଅଡିଓ ରେ ପଠାନ୍ତୁ",                       # od
+    "audio me bhejo",                       # what half of them actually type
+])
+def test_voice_is_asked_for_in_every_language(text):
+    assert onboarding.wants_voice(text) is True
+
+
+def test_a_plain_complaint_does_not_ask_for_voice():
+    assert onboarding.wants_voice("the bank rejected my loan on 3 March") is False
+
+
+def test_voice_mode_sends_the_reply_as_a_voice_note_too(sent, monkeypatch):
+    """Added, never substituted: TTS can fail and she must still have the words."""
+    spoken = []
+    monkeypatch.setattr(whatsapp, "send_voice",
+                        lambda to, text, language_code: spoken.append((text, language_code)))
+
+    case_id = store.case_for_phone("91444")
+    store.update_case(case_id, language="ta-IN", voice_mode=1)
+    whatsapp._reply("91444", case_id, "உங்கள் புகார் தயார்.\nhttps://rbi.org.in/x")
+
+    assert sent[-1][0] == "text"
+    assert spoken[-1][1] == "ta-IN", "the voice must use her language, not a default"
+    assert "https" not in spoken[-1][0], "a URL read aloud is thirty seconds of noise"
+
+
+def test_asking_for_voice_turns_it_on_and_answers_aloud(sent, monkeypatch):
+    monkeypatch.setattr(whatsapp, "send_typing", lambda mid: None)
+    monkeypatch.setattr(whatsapp, "send_voice", lambda to, text, language_code: None)
+    case_id = store.case_for_phone("91333")
+    store.update_case(case_id, language="mr-IN")
+
+    whatsapp.handle_inbound(
+        {},
+        {"from": "91333", "id": "wamid.V1", "type": "text",
+         "text": {"body": "व्हॉइस मध्ये सांगा"}},
+    )
+
+    assert store.get_case(case_id)["voice_mode"] == 1
+    assert sent, "the confirmation must go out, not just the flag"
+
+
+def test_typing_shows_before_the_slow_part_starts(sent, monkeypatch):
+    """A minute of silence after a voice note reads as a dead bot, so the indicator
+    has to go out before the pipeline runs, not after it."""
+    order = []
+    monkeypatch.setattr(whatsapp, "send_typing", lambda mid: order.append(("typing", mid)))
+    monkeypatch.setattr(whatsapp, "_handle_language",
+                        lambda phone, case_id, action: order.append(("work", None)))
+
+    whatsapp.handle_inbound(
+        {"contacts": [{"profile": {"name": "Sunita"}}]},
+        {"from": "91999", "id": "wamid.T1", "type": "text", "text": {"body": "hi"}},
+    )
+
+    assert order[0] == ("typing", "wamid.T1")
+    assert ("work", None) in order
 
 
 def test_a_question_is_answered_not_interrogated(sent, monkeypatch):

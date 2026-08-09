@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS cases (
     clock_offset_days INTEGER NOT NULL DEFAULT 0,
     draft_text    TEXT,
     approved_at   TEXT,
+    -- She asked to be answered in voice notes. Sticky: set once, honoured for every
+    -- reply on this case until it is reset.
+    voice_mode    INTEGER NOT NULL DEFAULT 0,
     -- Who may read this case. A random per-browser token for web cases, "wa:<phone>"
     -- for WhatsApp. NULL means nobody: a case_id alone is not a credential.
     owner_token   TEXT
@@ -122,6 +125,8 @@ def init() -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(cases)")}
         if "owner_token" not in columns:
             conn.execute("ALTER TABLE cases ADD COLUMN owner_token TEXT")
+        if "voice_mode" not in columns:
+            conn.execute("ALTER TABLE cases ADD COLUMN voice_mode INTEGER NOT NULL DEFAULT 0")
 
 
 def _now() -> str:

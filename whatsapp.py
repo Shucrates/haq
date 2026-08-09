@@ -23,6 +23,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from datetime import date
 
 import httpx
@@ -168,6 +169,11 @@ def handle_inbound(value: dict, message: dict) -> None:
         if not phone:
             return
 
+        # The chain behind one reply is Saaras -> 105B -> ladder -> Mayura -> Bulbul.
+        # Silence that long reads as a dead bot, so show WhatsApp's own typing bubble
+        # before any of it starts.
+        send_typing(inbound["message_id"])
+
         text = inbound["text"] or ""
         action = inbound.get("value")
         case_id = store.case_for_phone(phone)
@@ -209,6 +215,18 @@ def handle_inbound(value: dict, message: dict) -> None:
             _say(phone, case_id, "Send a message or a voice note describing your problem.")
             return
 
+        # "Answer me in a voice note." Sticky from here on, and set BEFORE the reply
+        # is produced so the message that asked for it is itself answered aloud.
+        if onboarding.wants_voice(text) and not case.get("voice_mode"):
+            store.update_case(case_id, voice_mode=1)
+            store.add_event(case_id, "voice_mode", "on")
+            # Nothing else in the message: it was a setting change, not an answer.
+            # ponytail: word count, not intent parsing. A long message that happens to
+            # mention voice still flows into the case, which is the half that matters.
+            if len(text.split()) <= 6:
+                _say(phone, case_id, "Okay — I will send my answers as voice notes too.")
+                return
+
         # A draft is already on the table, so this message is a decision about it,
         # not an answer to a fact question. Without this branch a button tap falls
         # through to the interrogation, gets read as a fact, and the bot re-drafts.
@@ -222,6 +240,25 @@ def handle_inbound(value: dict, message: dict) -> None:
         log.exception("whatsapp_inbound_failed: %s", exc)
 
 
+def _reply(phone: str, case_id: str, native: str) -> bool:
+    """Send one already-translated message, plus a voice note if she asked for one.
+
+    Every sentence HAQ says leaves through here. Voice is added rather than
+    substituted: TTS can fail, and a silent failure would drop the message entirely.
+    """
+    ok = send_text(phone, native)
+
+    case = store.get_case(case_id) or {}
+    if case.get("voice_mode"):
+        try:
+            # A source URL read out character by character is thirty seconds of noise.
+            spoken = re.sub(r"https?://\S+", "", native).strip()
+            send_voice(phone, spoken, language_code=case.get("language") or "en-IN")
+        except Exception as exc:  # noqa: BLE001 — she already has the text
+            log.warning("voice_reply_failed: %s", exc)
+    return ok
+
+
 def _say(phone: str, case_id: str, english: str) -> bool:
     """Send one message in the language this case chose.
 
@@ -231,7 +268,7 @@ def _say(phone: str, case_id: str, english: str) -> bool:
     decide what language a person is spoken to in.
     """
     language = (store.get_case(case_id) or {}).get("language")
-    return send_text(phone, agent.localise(english, language))
+    return _reply(phone, case_id, agent.localise(english, language))
 
 
 def _debug(exc: Exception) -> str:
@@ -286,7 +323,7 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
         store.save_document(case_id, inbound.get("filename"), "failed", {"error": str(exc)})
         # The debug tail is appended AFTER localisation — it is a stack trace for us,
         # not a sentence for her, and translating it would only make it useless.
-        send_text(phone, agent.localise(_document_problem(exc), language) + _debug(exc))
+        _reply(phone, case_id, agent.localise(_document_problem(exc), language) + _debug(exc))
         return
 
     split = documents.to_facts(extracted)
@@ -304,7 +341,7 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
         lines.append(f"Is this right — {item['field'].replace('_', ' ')}: {item['value']}?")
     # The values inside are what she has to check, and Mayura carries dates and
     # amounts through unchanged (numerals_format=international).
-    send_text(phone, agent.localise("\n".join(lines), language))
+    _reply(phone, case_id, agent.localise("\n".join(lines), language))
 
 
 def _handle_language(phone: str, case_id: str, action: str | None) -> None:
@@ -318,7 +355,7 @@ def _handle_language(phone: str, case_id: str, action: str | None) -> None:
     if code:
         store.update_case(case_id, language=code)
         store.add_event(case_id, "language", code)
-        send_text(phone, onboarding.greeting(code))
+        _reply(phone, case_id, onboarding.greeting(code))
         return
 
     # "More languages" -> page two. Anything else -> page one.
@@ -437,7 +474,7 @@ def _advance_case(phone: str, text: str) -> None:
         if classified.get("intent") == "question":
             store.add_message(case_id, "user", text)
             answer = agent.answer_question(text, case.get("language"))
-            send_text(phone, answer)
+            _reply(phone, case_id, answer)
             store.add_message(case_id, "assistant", answer)
             store.add_event(case_id, "guidance", classified.get("grievance_class") or "other")
             return
@@ -461,7 +498,7 @@ def _advance_case(phone: str, text: str) -> None:
     step = agent.next_question(case_id, required)
 
     if not step["done"]:
-        send_text(phone, step["question_native"] or step["question"])
+        _reply(phone, case_id, step["question_native"] or step["question"])
         return
 
     # Fact sheet complete -> resolve. The refusal is decided by the pure function.
@@ -483,7 +520,7 @@ def _advance_case(phone: str, text: str) -> None:
         # The rule id is for us. It was going out to every user as `Blocked:
         # tier1_not_exhausted`, which is a variable name, not a sentence.
         tail = f"\n\n_Blocked: {blocked}_" if os.getenv("HAQ_DEBUG") == "1" else ""
-        send_text(phone, f"{reason}{tail}\n{verdict.source_url}")
+        _reply(phone, case_id, f"{reason}{tail}\n{verdict.source_url}")
         return
 
     built = drafting.build_body(case, verdict, verdict.current_tier)
@@ -556,6 +593,21 @@ def send_text(to: str, body: str) -> bool:
         "to": to,
         "type": "text",
         "text": {"body": body[:4096]},
+    })
+
+
+def send_typing(message_id: str | None) -> bool:
+    """WhatsApp's native typing indicator — same /messages endpoint, so _send carries
+    it. Marking the inbound read is part of the same call and is what Meta requires.
+    Cleared when our reply lands, or after 25 seconds.
+    # ponytail: one shot per inbound; re-arm on a timer if a chain outlives the 25s."""
+    if not message_id:
+        return False
+    return _send({
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {"type": "text"},
     })
 
 
