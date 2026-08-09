@@ -14,7 +14,7 @@ an Ombudsman complaint that gets rejected, burning the user's one chance. HAQ kn
 the rules well enough to say no — and that is not a prompt, it is a tested function.
 
 ```
-pytest -v   ->  25 passed
+pytest -v   ->  145 passed
 ```
 
 ---
@@ -151,15 +151,30 @@ touches the network. `sources.search()` calls Firecrawl with `includeDomains` se
 afterwards — and `sources.extract_snippet()` uses 105B to reduce each page to one short
 statement.
 
-`drafting.validate_citations()` builds its allowed set from Tier A **only**. Tier B ids
-are never added, so any web-derived citation the model emits is deleted by the renderer
-that was already there. No new safety code — and it makes the Q&A answer stronger:
+`drafting.validate_citations()` runs on every draft, in two passes:
 
-> *"We do search the web — government domains only. And the renderer still deletes every
-> citation that isn't human-verified. Here's a draft where it stripped one."*
+1. **Markers.** The allowed set is built from Tier A **only**. Tier B ids are never added,
+   so any web-derived `[citation]` the model emits is deleted.
+2. **Claims.** A sentence stating a *numbered* legal reference — `Section 7(1)`,
+   `Regulation 12`, `Act 2005` — that carries no surviving citation is deleted whole.
 
-`test_sources.py::test_web_citation_is_stripped_from_the_filing` asserts exactly this.
-If it goes red, that claim has become false — treat it as a release blocker.
+Pass 2 exists because pass 1 alone was weaker than this README used to claim. It could only
+delete a marker, so a sentence reading *"Section 7(1) of the RTI Act requires disposal within
+thirty days"*, with no bracket anywhere, went through untouched — and `grounded` reported
+`true`, because nothing had been stripped. The marker was never there to strip. `grounded` is
+now false if **either** pass removed anything.
+
+> *"We do search the web — government domains only. The renderer deletes every citation that
+> isn't human-verified, and every legal claim that isn't cited at all. Here's a draft where it
+> stripped both."*
+
+`test_sources.py` asserts exactly this — `test_web_citation_is_stripped_from_the_filing` for
+pass 1, `test_an_uncited_section_number_does_not_survive` for pass 2. If either goes red, the
+claim above has become false: treat it as a release blocker.
+
+Ordinary sentences are never touched (`test_ordinary_sentences_are_never_touched`), and if the
+validator ever strips a body down to nothing the template fallback is sent rather than a blank
+page — a blank PDF is worse than an ungrounded one.
 
 Promotion is how the corpus grows: a human reviews a Tier B snippet and writes it into
 `data/statutes.json` with their name in `verified_by`. Editorial work, not engineering.
@@ -271,7 +286,10 @@ never the right answer.
 - **Precedent data is seeded**, not real. `data/precedent.json` says so in the file, and
   `sample_size` is 0 on every row.
 - **The Haq score is a rule-based formula**, not a model.
-- **No auth, no accounts, no multi-tenancy.** One case per browser, one case per phone.
+- **No accounts, no multi-tenancy.** Cases are bound to the browser session that opened
+  them (an httponly `haq_sid` cookie) or to the WhatsApp number that started them, and every
+  case route answers 404 to anyone else — see `test_auth.py`. That is ownership, not identity:
+  there is no login, no recovery, and clearing cookies orphans the case.
 - **Legal content is unverified.** See above.
 
 Deliberately unused from the Sarvam surface: Voice Agents, realtime STT streaming,

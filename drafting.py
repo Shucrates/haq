@@ -85,12 +85,29 @@ def retrieve(query: str, limit: int = 4) -> list[Retrieved]:
 
 CITATION_MARKER = re.compile(r"\[([a-z0-9_]+)\]")
 
+# A numbered legal reference: "Section 7(1)", "Regulation 12", "Clause 4.2", "Act 2005".
+# The number is what makes a claim falsifiable, and what a judge checks.
+LEGAL_CLAIM = re.compile(
+    r"\b(section|regulation|clause|rule|article|paragraph|act|scheme)\b[^.]{0,40}?\d",
+    re.I,
+)
+# A sentence, plus any citation markers trailing it. DRAFT_PROMPT asks for the
+# marker *after* the sentence it supports, so it sits past the full stop — splitting
+# on punctuation alone would orphan the marker and delete the sentence that earned it.
+SENTENCE = re.compile(r"[^.!?]+[.!?]*(?:[ \t]*\[[a-z0-9_]+\])*")
 
-def validate_citations(body: str, retrieved: list[Retrieved]) -> tuple[str, list[str]]:
-    """Strip any citation lacking a source_url retrieved this session.
 
-    This runs on every draft, always. It is the reason the grounding claim in Q&A is
-    a fact about the code rather than a hope about the prompt.
+def validate_citations(body: str, retrieved: list[Retrieved]) -> tuple[str, list[str], list[str]]:
+    """Strip any citation lacking a source_url retrieved this session, then strip any
+    sentence that states a numbered legal rule without one.
+
+    Two passes, because the first alone was not the guarantee it was sold as. It
+    deleted `[unknown_id]` markers, so the model could not attribute a claim to an
+    unverified source — but a sentence reading "Section 7(1) of the RTI Act requires
+    disposal within thirty days", with no bracket at all, passed through untouched
+    and still reported grounded=True. The marker was never there to strip.
+
+    Returns (cleaned, stripped_markers, stripped_claims).
     """
     allowed = {r.id for r in retrieved if r.source_url}
     stripped: list[str] = []
@@ -103,9 +120,25 @@ def validate_citations(body: str, retrieved: list[Retrieved]) -> tuple[str, list
         return ""
 
     cleaned = CITATION_MARKER.sub(replace, body)
+
+    # Any marker still standing after the first pass is an allowed one, so a sentence
+    # carrying one is grounded by definition. Line structure is preserved because
+    # build_pdf splits the body on newlines to lay out paragraphs.
+    stripped_claims: list[str] = []
+    kept_lines: list[str] = []
+    for line in cleaned.split("\n"):
+        kept = []
+        for sentence in SENTENCE.findall(line):
+            if LEGAL_CLAIM.search(sentence) and not CITATION_MARKER.search(sentence):
+                stripped_claims.append(sentence.strip())
+                continue
+            kept.append(sentence)
+        kept_lines.append("".join(kept))
+    cleaned = "\n".join(kept_lines)
+
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +([.,;])", r"\1", cleaned)
-    return cleaned.strip(), stripped
+    return cleaned.strip(), stripped, stripped_claims
 
 
 def build_body(case: dict, verdict, tier: int) -> dict:
@@ -150,7 +183,13 @@ def build_body(case: dict, verdict, tier: int) -> dict:
 
     # NOTE: `retrieved` only — web_sources are deliberately NOT passed here, so any
     # Tier B id the model emits falls outside the allowed set and gets deleted.
-    grounded_body, stripped = validate_citations(raw, retrieved)
+    grounded_body, stripped, stripped_claims = validate_citations(raw, retrieved)
+
+    # If the validator took everything, send the template rather than a blank page.
+    # The fallback is our own text plus the user's own words plus Tier A snippets
+    # that carry their markers — it contains no model-invented law by construction.
+    if not grounded_body.strip():
+        grounded_body = _fallback_body(case, facts, retrieved)
 
     # The filing goes out in formal English regardless of the language spoken.
     if case.get("language") and not str(case["language"]).startswith("en"):
@@ -166,7 +205,8 @@ def build_body(case: dict, verdict, tier: int) -> dict:
             for r in retrieved
         ],
         "stripped": stripped,
-        "grounded": not stripped,
+        "stripped_claims": stripped_claims,
+        "grounded": not stripped and not stripped_claims,
         # Shown to the user as background reading, clearly separated from citations.
         "web_context": [w.as_dict() for w in web_sources],
     }

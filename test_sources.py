@@ -47,7 +47,7 @@ def test_web_citation_is_stripped_from_the_filing(tier_a, tier_b):
         "The charge was wrongly levied. [rbi_bsbda_no_amc] "
         "The bank must reply within thirty days. [web_rbi_org_in_faq_page]"
     )
-    cleaned, stripped = validate_citations(body, tier_a)
+    cleaned, stripped, _ = validate_citations(body, tier_a)
 
     assert "web_rbi_org_in_faq_page" not in cleaned
     assert "web_rbi_org_in_faq_page" in stripped
@@ -59,14 +59,87 @@ def test_passing_web_sources_as_citable_would_break_it(tier_a, tier_b):
     drafting.build_body(). Documented as a test so the mistake is obvious."""
     body = "Claim. [web_rbi_org_in_faq_page]"
 
-    _, stripped_correctly = validate_citations(body, tier_a)
+    _, stripped_correctly, _ = validate_citations(body, tier_a)
     assert stripped_correctly == ["web_rbi_org_in_faq_page"]
 
     # If someone ever passes web sources into the allowed set, the id survives —
     # which is precisely the regression this file exists to catch.
     smuggled = tier_a + [Retrieved(tier_b.id, tier_b.text, tier_b.url, "unverified")]
-    _, stripped_wrongly = validate_citations(body, smuggled)
+    _, stripped_wrongly, _ = validate_citations(body, smuggled)
     assert stripped_wrongly == [], "demonstrates why build_body passes only Tier A"
+
+
+# ------------------------------------------------ claims without any marker at all
+
+
+def test_an_uncited_section_number_does_not_survive(tier_a):
+    """The hole the marker pass could not see. No bracket was ever emitted, so there
+    was nothing to strip, and the draft still reported itself fully grounded."""
+    body = "Section 7(1) of the Right to Information Act 2005 requires disposal in thirty days."
+
+    cleaned, stripped, claims = validate_citations(body, tier_a)
+
+    assert "Section 7(1)" not in cleaned
+    assert stripped == [], "no marker was present — the first pass sees nothing here"
+    assert len(claims) == 1
+
+
+def test_grounded_is_false_when_a_claim_was_removed(tier_a):
+    """`grounded` was `not stripped`, so this exact body reported True."""
+    body = "Regulation 12 of the scheme entitles me to compensation."
+    _, stripped, claims = validate_citations(body, tier_a)
+    assert not stripped
+    assert claims, "grounded must not be able to report True here"
+
+
+def test_a_properly_cited_legal_claim_survives_untouched(tier_a):
+    body = "No annual maintenance charge is permitted under Section 4 of the direction. [rbi_bsbda_no_amc]"
+
+    cleaned, stripped, claims = validate_citations(body, tier_a)
+
+    assert stripped == [] and claims == []
+    assert "Section 4" in cleaned
+    assert "rbi_bsbda_no_amc" in cleaned
+
+
+def test_ordinary_sentences_are_never_touched(tier_a):
+    """Over-eager stripping would gut real letters. Only numbered legal references
+    are in scope."""
+    body = ("The bank debited Rs. 9,840 from my account on 12 June 2026.\n"
+            "I wrote to the branch manager and received no reply.\n"
+            "I request that the amount be reversed.")
+
+    cleaned, stripped, claims = validate_citations(body, tier_a)
+
+    assert claims == [] and stripped == []
+    assert cleaned == body, "paragraph structure and wording must be preserved exactly"
+
+
+def test_only_the_offending_sentence_is_removed(tier_a):
+    body = "The charge was wrongly levied. Section 9 says so. I want it reversed."
+
+    cleaned, _, claims = validate_citations(body, tier_a)
+
+    assert "The charge was wrongly levied." in cleaned
+    assert "I want it reversed." in cleaned
+    assert "Section 9" not in cleaned
+    assert len(claims) == 1
+
+
+def test_a_body_stripped_to_nothing_falls_back_rather_than_going_blank(monkeypatch, tier_b):
+    """A blank PDF is worse than an ungrounded one."""
+    monkeypatch.setattr(drafting, "retrieve", lambda q, limit=4: [])
+    monkeypatch.setattr(drafting.sources, "context_for", lambda q, limit=3: [])
+    monkeypatch.setattr(drafting.sarvam, "chat",
+                        lambda *a, **k: "Section 4 of the Act applies. Rule 9 also applies.")
+
+    case = {"facts": {"institution": "Bank of Maharashtra"}, "transcript": "they took my money",
+            "grievance_class": "banking/x", "language": "en-IN"}
+    out = drafting.build_body(case, None, 1)
+
+    assert out["body_text"].strip(), "must not hand the user an empty document"
+    assert out["grounded"] is False
+    assert len(out["stripped_claims"]) == 2
 
 
 def test_build_body_never_lets_web_context_be_cited(monkeypatch, tier_b):

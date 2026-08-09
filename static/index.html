@@ -390,11 +390,17 @@ $('#draftBtn').onclick = async () => {
   const stripped = d.stripped_citations.length
     ? `<div class="muted" style="color:var(--warn)">Renderer deleted ${d.stripped_citations.length}
        ungrounded citation(s): ${d.stripped_citations.join(', ')}</div>` : '';
+  // An invented section number carries no marker to strip, so the renderer deletes
+  // the whole sentence. Show what it took — this is the safety property, visible.
+  const claims = (d.stripped_claims && d.stripped_claims.length)
+    ? `<div class="muted" style="color:var(--warn)">Renderer deleted ${d.stripped_claims.length}
+       uncited legal claim(s): ${d.stripped_claims.map(c=>escapeHtml(c)).join(' · ')}</div>` : '';
   $('#draftOut').innerHTML =
     `<div class="row"><span class="pill">${d.tier_name}</span>
       <span class="pill">${d.grounded ? 'fully grounded' : 'citations stripped'}</span>
       <a href="${d.pdf_url}" target="_blank">Download PDF</a></div>
      ${stripped}
+     ${claims}
      <pre style="margin-top:12px">${escapeHtml(d.body_text)}</pre>
      <div class="muted" style="margin-top:8px">Cited (verified): ${
        d.citations.map(c=>`<a href="${c.source_url}" target="_blank">${c.id}</a>`).join(' · ') || 'none'}</div>

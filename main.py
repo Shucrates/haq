@@ -455,6 +455,7 @@ def draft(payload: DraftRequest, request: Request):
         "body_text": built["body_text"],
         "citations": built["citations"],
         "stripped_citations": built["stripped"],
+        "stripped_claims": built["stripped_claims"],
         "grounded": built["grounded"],
         "web_context": built.get("web_context", []),
         "tier": tier,
