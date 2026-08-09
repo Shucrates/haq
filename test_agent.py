@@ -5,6 +5,8 @@ happens nothing errors: pending_facts() silently drops the fact, next_question()
 reports done, and the case sits unresolvable forever. These tests are the guard.
 """
 
+import re
+
 import pytest
 
 import agent
@@ -127,6 +129,58 @@ def test_guidance_falls_back_rather_than_answering_from_nothing(monkeypatch):
     out = agent.answer_question("do I get a loan", "en-IN")
 
     assert out == agent.GUIDANCE_FALLBACK, "an answer stripped to nothing is not an answer"
+
+
+# ------------------------------------------------------------------ nativise
+
+
+@pytest.fixture
+def repaired(monkeypatch):
+    calls = []
+
+    def fake_translate(text, target="en-IN", source="auto"):
+        calls.append((text, target))
+        return "बँकेत जा आणि कर्जासाठी अर्जपत्र भरा."
+
+    monkeypatch.setattr(agent.sarvam, "translate", fake_translate)
+    return calls
+
+
+def test_a_code_mixed_answer_is_repaired(repaired):
+    """What the user actually saw: fluent Marathi to anyone who already reads English,
+    unreadable to the person this is built for."""
+    out = agent.nativise("Bank-मध्ये जा आणि loan-साठी form भरा.", "mr-IN")
+    assert not re.search(r"[A-Za-z]{2,}", out)
+    assert repaired[0][1] == "mr-IN"
+
+
+def test_an_already_native_answer_costs_nothing(repaired):
+    text = "बँकेत जा आणि कर्जासाठी अर्ज भरा."
+    assert agent.nativise(text, "mr-IN") == text
+    assert repaired == [], "no Latin run, no call"
+
+
+@pytest.mark.parametrize("language", [None, "", "en-IN"])
+def test_english_is_left_alone(repaired, language):
+    text = "Go to the bank and fill the loan form."
+    assert agent.nativise(text, language) == text
+    assert repaired == []
+
+
+def test_a_single_stray_letter_is_not_a_leak(repaired):
+    """An initial or a unit is not an English word — repairing on one letter would
+    send every answer back through a translator."""
+    assert agent.nativise("तुमचा A खाते क्रमांक सांगा.", "mr-IN") == "तुमचा A खाते क्रमांक सांगा."
+    assert repaired == []
+
+
+def test_a_repair_failure_keeps_the_half_english_answer(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("mayura down")
+
+    monkeypatch.setattr(agent.sarvam, "translate", boom)
+    text = "Bank-मध्ये जा."
+    assert agent.nativise(text, "mr-IN") == text
 
 
 # ------------------------------------------------------------------ localise

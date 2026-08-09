@@ -81,8 +81,14 @@ No prose, no markdown fence."""
 GUIDANCE_PROMPT = """You answer practical questions about Indian banking, loans, and the
 documents they need, for a person who may have had little schooling.
 
-Answer in the language named, in that language's own script. Under 90 words, plain
-sentences, a short list only where a list is genuinely clearer.
+Answer in the language named. Under 90 words, plain sentences, a short list only where
+a list is genuinely clearer.
+
+EVERY WORD must be in that language, in that language's own script. Do not use English
+words and do not write anything in Latin letters. Words like bank, loan, form, document,
+proof, list, salary and statement all have ordinary words in that language — use them. A
+name with no equivalent (Aadhaar, PAN) is written in that language's script, never in
+Latin letters. A reader who knows no English must be able to read every word.
 
 You are given two blocks of material and they are NOT equivalent:
 
@@ -105,7 +111,11 @@ some facts and need exactly ONE more.
 
 Ask a single short question, in the person's language, for the fact named below.
 Rules: one question only, under 25 words, no preamble, no explanation, no lists.
-Write it in that language's own script — never transliterated into Latin letters.
+
+EVERY WORD must be in that language, in that language's own script. No English words,
+nothing in Latin letters — not "bank", not "loan", not "form". A reader who knows no
+English must be able to read every word.
+
 Reply with ONLY the question text."""
 
 REFUSAL_PROMPT = """Explain, kindly and in under 45 words, why this complaint cannot be filed
@@ -123,6 +133,35 @@ def _first_json(text: str) -> dict:
     if not match:
         raise ValueError("no JSON object in model output")
     return json.loads(match.group(0))
+
+
+# Two or more Latin letters in a row. One stray letter is a unit or an initial; a run
+# is an English word that leaked through.
+_LATIN_RUN = re.compile(r"[A-Za-z]{2,}")
+
+
+def nativise(text: str, language: str | None) -> str:
+    """Repair an answer that came back half in English.
+
+    105B code-mixes the way an urban speaker does — "Bank-मध्ये जा आणि loan-साठी form
+    भरा" — which is fluent Marathi to someone who already reads English and unreadable
+    to the person this is built for. Asking the prompt not to do it works, and the
+    prompts now say so in every language path; this is the part that does not depend
+    on a model following an instruction.
+
+    Mayura is the repair because it is a translator: handed that sentence it returns
+    "बँकेत जा आणि कर्जासाठी अर्जपत्र भरा" — the English words replaced by the ordinary
+    Marathi ones, not transliterated into Devanagari spelling of "bank" and "loan".
+
+    Costs nothing on the common path: no Latin run, no call.
+    """
+    if not language or language.startswith("en") or not _LATIN_RUN.search(text):
+        return text
+    try:
+        return sarvam.translate(text, target=language, source="auto").strip() or text
+    except Exception as exc:  # noqa: BLE001 — half-English beats nothing
+        log.warning("nativise_failed lang=%s: %s", language, exc)
+        return text
 
 
 @lru_cache(maxsize=512)
@@ -280,6 +319,9 @@ def answer_question(question: str, language: str | None) -> str:
     # The markers themselves are noise in a chat message — the URL is the proof.
     cited = {c for c in drafting.CITATION_MARKER.findall(cleaned)}
     body = drafting.CITATION_MARKER.sub("", cleaned).strip()
+    # Before the URLs are appended, not after — a URL is Latin by nature and would
+    # send every answer through the repair for nothing.
+    body = nativise(body, language)
     for r in retrieved:
         if r.id in cited:
             body += f"\n{r.source_url}"
@@ -364,6 +406,7 @@ def next_question(case_id: str, required: list[str]) -> dict:
             ],
             max_tokens=80,
         ).strip() or english
+        native = nativise(native, case["language"])
     except Exception:
         native = english  # never let a model failure stall the interrogation
 
