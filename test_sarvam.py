@@ -58,3 +58,25 @@ def test_an_empty_answer_is_logged_not_swallowed(posted, caplog):
         assert sarvam.chat([{"role": "user", "content": "hi"}]) == ""
 
     assert "sarvam_chat_empty" in caplog.text
+
+
+def test_opus_asks_for_a_sample_rate_opus_accepts(monkeypatch):
+    """The bug: WhatsApp voice notes never sent. Bulbul synthesises at 22050 Hz by
+    default and opus 400s on it — "OPUS codec requires one of these sample rates:
+    8000, 12000, 16000, 24000, 48000 Hz." Every read-back died in a logged warning."""
+    calls = []
+
+    def fake_post(path, *, bearer=False, **kwargs):
+        calls.append(kwargs.get("json"))
+        return {"audios": ["Zm9v"]}
+
+    monkeypatch.setattr(sarvam, "_post", fake_post)
+    monkeypatch.setenv("HAQ_MODE", "live")
+
+    sarvam.tts("नमस्कार", language_code="mr-IN", output_audio_codec="opus")
+    assert calls[0]["speech_sample_rate"] in (8000, 12000, 16000, 24000, 48000)
+
+    # wav is left alone: it works at the default, and adding a key would miss every
+    # response already recorded in data/cache.
+    sarvam.tts("नमस्कार", language_code="mr-IN")
+    assert "speech_sample_rate" not in calls[1]

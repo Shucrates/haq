@@ -39,6 +39,11 @@ STT_MAX_SECONDS = 30
 TTS_MAX_CHARS = 2500
 MAYURA_MAX_CHARS = 1000
 
+# Bulbul synthesises at 22050 Hz unless told otherwise, and opus rejects that rate:
+# "OPUS codec requires one of these sample rates: 8000, 12000, 16000, 24000, 48000".
+# Only sent for opus, so the recorded wav responses in data/cache keep their keys.
+OPUS_SAMPLE_RATE = 24000
+
 CHAT_SEED = 20260808  # fixed so replays and reruns look the same
 
 # sarvam-105b is a reasoning model and max_tokens covers the reasoning trace as well
@@ -252,6 +257,8 @@ def tts(text: str, language_code: str = "mr-IN", speaker: str = "ritu",
             "temperature": 0.6,
             "output_audio_codec": output_audio_codec,
         }
+        if output_audio_codec == "opus":
+            payload["speech_sample_rate"] = OPUS_SAMPLE_RATE
 
         def call(p=payload) -> dict:
             return _post("/text-to-speech", json=p)
