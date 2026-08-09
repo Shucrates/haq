@@ -25,6 +25,10 @@ MAX_TURNS = 6
 
 # The facts we chase, in order. The ladder decides which are REQUIRED; these are
 # the ones we know how to ask for in plain language.
+# A required fact missing from this list is never asked — pending_facts() filters
+# `required` through it — so the interrogation would report done with the fact still
+# pending and the case could never resolve. Keep it a superset of every fact any
+# ladder can require (ladder_engine.RULE_FACTS included).
 ASK_ORDER = [
     "tier1_written_complaint",
     "last_communication_on",
@@ -32,6 +36,7 @@ ASK_ORDER = [
     "amount_inr",
     "institution",
     "pending_in_court",
+    "commercial_decision",
 ]
 
 # Rule-based fallback questions. If the model is unavailable or returns junk, the
@@ -43,11 +48,16 @@ FALLBACK_QUESTIONS = {
     "amount_inr": "How much money is involved, in rupees?",
     "institution": "Which bank or institution is this about?",
     "pending_in_court": "Is this matter already in a court, tribunal or arbitration?",
+    "commercial_decision": (
+        "Is this about a business decision the bank made — refusing you a loan, "
+        "or closing an account it is allowed to close?"
+    ),
 }
 
 FACT_TYPES = {
     "tier1_written_complaint": "boolean",
     "pending_in_court": "boolean",
+    "commercial_decision": "boolean",
     "last_communication_on": "date",
     "tier1_filed_on": "date",
     "amount_inr": "number",

@@ -44,12 +44,15 @@ class Facts:
     tier1_written_complaint: bool | None = None
     tier1_filed_on: date | None = None
     last_communication_on: date | None = None
-    pending_in_court: bool = False
+    # None, not False. "Nobody asked" is not the same answer as "no", and defaulting
+    # a hard exclusion to the permissive value is how an unmaintainable case walks
+    # out with a filing. Unknown lands in facts_pending, which blocks the verdict.
+    pending_in_court: bool | None = None
     amount_inr: float = 0.0
     account_type: str | None = None
     institution: str | None = None
     # Set when the grievance is a commercial-decision style exclusion.
-    commercial_decision: bool = False
+    commercial_decision: bool | None = None
 
     def missing(self, required: list[str]) -> list[str]:
         """Required fact names that are still unknown."""
@@ -82,6 +85,33 @@ def load_ladders(directory: Path | None = None) -> dict:
         spec = yaml.safe_load(path.read_text())
         ladders[spec["ladder_id"]] = spec
     return ladders
+
+
+# Exclusion rules whose fact defaults to the PERMISSIVE answer when nobody asked.
+# A ladder that declares one of these exclusions is declaring the fact required,
+# whether or not it remembered to list it under required_facts.
+#
+# Deliberately not listed: the date and amount rules. Those already fail safe —
+# time_barred and waiting_period_not_elapsed return "not blocked" on missing dates
+# rather than inventing one, and every ladder that uses them already declares the
+# dates it needs. Deriving them here would make a legitimate no-reply case
+# (last_communication_on is genuinely null) impossible to ever complete.
+RULE_FACTS: dict[str, list[str]] = {
+    "tier1_not_exhausted": ["tier1_written_complaint"],
+    "pending_in_court": ["pending_in_court"],
+    "commercial_decision": ["commercial_decision"],
+}
+
+
+def required_facts(ladder: dict) -> list[str]:
+    """What this ladder actually needs: the facts it declares, plus the facts its
+    own exclusions read. Stable order — declared first, derived after."""
+    out = list(ladder.get("required_facts", []))
+    for exclusion in ladder.get("exclusions", []):
+        for name in RULE_FACTS.get(exclusion["rule"], []):
+            if name not in out:
+                out.append(name)
+    return out
 
 
 def _select_ladder(facts: Facts, ladders: dict) -> dict | None:
@@ -188,7 +218,7 @@ def resolve(facts: Facts, ladders: dict, today: date) -> Verdict:
     target_tier = ladder.get("target_tier", 2)
     tiers = {t["tier"]: t for t in ladder["tiers"]}
 
-    pending = facts.missing(ladder.get("required_facts", []))
+    pending = facts.missing(required_facts(ladder))
 
     blocked_by: list[str] = []
     blocked_messages: list[str] = []

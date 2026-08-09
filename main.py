@@ -62,7 +62,13 @@ def _ladder_for(case: dict) -> dict | None:
 
 def required_facts_for(case: dict) -> list[str]:
     ladder = _ladder_for(case)
-    return ladder.get("required_facts", []) if ladder else []
+    return ladder_engine.required_facts(ladder) if ladder else []
+
+
+def _tri_state(value) -> bool | None:
+    """Pass an unanswered boolean through as None. `bool(x or False)` turned every
+    unasked exclusion into a "no", which is the permissive answer."""
+    return None if value is None else bool(value)
 
 
 def facts_from_case(case: dict) -> Facts:
@@ -72,11 +78,11 @@ def facts_from_case(case: dict) -> Facts:
         tier1_written_complaint=stored.get("tier1_written_complaint"),
         tier1_filed_on=stored.get("tier1_filed_on"),
         last_communication_on=stored.get("last_communication_on"),
-        pending_in_court=bool(stored.get("pending_in_court") or False),
+        pending_in_court=_tri_state(stored.get("pending_in_court")),
         amount_inr=float(stored.get("amount_inr") or 0),
         account_type=stored.get("account_type"),
         institution=stored.get("institution"),
-        commercial_decision=bool(stored.get("commercial_decision") or False),
+        commercial_decision=_tri_state(stored.get("commercial_decision")),
     )
 
 

@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from ladder_engine import Facts, load_ladders, resolve
+from ladder_engine import Facts, load_ladders, required_facts, resolve
 
 L = load_ladders()
 TODAY = date(2026, 8, 8)
@@ -22,11 +22,38 @@ def banking(**kw) -> Facts:
         tier1_filed_on=date(2026, 6, 1),
         last_communication_on=date(2026, 6, 15),
         pending_in_court=False,
+        commercial_decision=False,
         amount_inr=1200.0,
         account_type="bsbda",
     )
     base.update(kw)
     return Facts(**base)
+
+
+def test_unasked_exclusion_is_pending_not_permission():
+    """The bug this pins: pending_in_court defaulted to False, so a case nobody
+    asked walked out maintainable. Unknown must block, not permit."""
+    for name in ("pending_in_court", "commercial_decision"):
+        v = resolve(banking(**{name: None}), L, TODAY)
+        assert v.maintainable is False, f"{name} unknown must not be maintainable"
+        assert name in v.facts_pending
+        assert v.blocked_by == [], "unknown is pending, not blocked — different states"
+
+
+def test_ladder_declaring_an_exclusion_requires_its_fact():
+    """required_facts in the YAML lists neither boolean; the exclusions do the
+    declaring, so the engine derives them rather than trusting the author."""
+    derived = required_facts(L["rbi_rbios_2026"])
+    assert "pending_in_court" in derived
+    assert "commercial_decision" in derived
+    assert derived[: len(L["rbi_rbios_2026"]["required_facts"])] == \
+        L["rbi_rbios_2026"]["required_facts"], "declared facts keep their order first"
+
+
+def test_rti_does_not_inherit_banking_exclusions():
+    """Derivation is per-ladder. RTI declares no commercial_decision exclusion, so
+    asking about one would be an interrogation the law does not need."""
+    assert "commercial_decision" not in required_facts(L["rti_2005"])
 
 
 def test_tier1_not_exhausted_blocks_ombudsman():
