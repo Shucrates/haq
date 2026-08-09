@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -303,18 +304,39 @@ class DraftRequest(BaseModel):
 
 @app.post("/api/draft")
 def draft(payload: DraftRequest):
-    """template -> 105B -> validate_citations -> Mayura -> PDF. STATE: DRAFTING."""
+    """template -> 105B -> validate_citations -> Mayura -> PDF. STATE: DRAFTING.
+
+    The refusal is ENFORCED here, not merely reported by /api/resolve. A blocked case
+    that still walks away with a filable PDF is the product's central claim broken —
+    and /api/resolve is advisory, so nothing stopped a client from skipping it.
+    """
     case = _case_or_404(payload.case_id)
     verdict = verdict_for(case)
-    tier = payload.tier or verdict.current_tier
+
+    if not verdict.maintainable:
+        store.add_event(
+            payload.case_id,
+            "draft_blocked",
+            ", ".join(verdict.blocked_by) or ", ".join(verdict.facts_pending) or "not maintainable",
+        )
+        out = verdict_json(verdict)
+        out["refusal_native"] = agent.phrase_refusal(verdict, case.get("language"))
+        # jsonable_encoder, not the raw dict: PyYAML parses `verified_on: 2026-08-08`
+        # into a date, and JSONResponse (unlike a returned dict) will not encode one.
+        return JSONResponse(status_code=409, content=jsonable_encoder(out))
+
+    # A maintainable verdict always came from a ladder, so `tiers` is never empty here.
+    ladder = _ladder_for(case) or {}
+    tiers = {t["tier"]: t["name"] for t in ladder.get("tiers", [])}
+    tier = verdict.current_tier if payload.tier is None else payload.tier
+    if tier not in tiers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tier {tier} does not exist in ladder {verdict.ladder_id}",
+        )
+    tier_name = tiers[tier]
 
     built = drafting.build_body(case, verdict, tier)
-
-    ladder = _ladder_for(case) or {}
-    tier_name = next(
-        (t["name"] for t in ladder.get("tiers", []) if t["tier"] == tier),
-        f"tier {tier}",
-    )
 
     drafting.build_pdf(
         payload.case_id, built["body_text"], built["citations"], tier_name, _today_for(case)
