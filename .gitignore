@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+haq.db
+haq.db-wal
+haq.db-shm
+data/drafts/
+.DS_Store
