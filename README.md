@@ -17,6 +17,11 @@ the rules well enough to say no — and that is not a prompt, it is a tested fun
 pytest -v   ->  145 passed
 ```
 
+**[PRD.md](PRD.md)** is the current specification — what was built, what is true, and
+what is still blocking. `HAQ BUILD PRD.pdf` is the original v1 planning document, kept
+for the record; several of its technical assumptions turned out to be wrong and PRD.md
+says which.
+
 ---
 
 ## Setup
