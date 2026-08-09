@@ -15,12 +15,16 @@ a listed risk (PRD 11) and a parse error must never reach the user.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, datetime
+from functools import lru_cache
 
 import onboarding
 import sarvam
 import store
+
+log = logging.getLogger("haq.agent")
 
 MAX_TURNS = 6
 
@@ -82,6 +86,7 @@ yet and what the person must do first. Do not invent any rule or section number 
 reason given. Reply with only the explanation."""
 
 
+
 # ------------------------------------------------------------------ helpers
 
 
@@ -91,6 +96,49 @@ def _first_json(text: str) -> dict:
     if not match:
         raise ValueError("no JSON object in model output")
     return json.loads(match.group(0))
+
+
+@lru_cache(maxsize=512)
+def localise(text: str, language: str | None, limit: int | None = None) -> str:
+    """Put one outbound message into the person's language.
+
+    Everything HAQ says other than the questions and the filing itself used to be an
+    English literal, so a woman who picked Marathi was asked in Marathi and then told
+    "Filed. I will watch the clock for you." Rather than hand-translate the strings
+    into eleven languages and let them rot, they are translated on the way out.
+
+    Mayura, not 105B, and the reason is measured rather than assumed. 105B is a
+    reasoning model with no off switch: asked for "No, change it" in Marathi it spent
+    1200-3700 tokens deliberating, took 8-27 seconds, and on two of twelve sample
+    strings produced nothing but a reasoning trace — which this function reads as a
+    failure and answers with the English original. An LLM layer that emits English
+    one time in six is the bug it was added to fix. Mayura returns the same strings
+    in 0.4s. 105B keeps the work that is actually generative: the questions, the
+    refusal, and the draft body.
+
+    Cached on (text, language) so the fixed chrome is translated once per process.
+    The English original is returned on any failure — a message the person cannot
+    read still beats no message at all.
+    """
+    if not text.strip() or not language or language.startswith("en"):
+        return text
+
+    # Line by line, because Mayura returns one flowing paragraph and the deadline
+    # list stops being a list. Each line caches on its own, so the sentence above a
+    # varying set of dates is still only ever translated once.
+    if "\n" in text:
+        return "\n".join(localise(line, language) if line.strip() else line
+                         for line in text.split("\n"))
+
+    try:
+        out = sarvam.translate(text, target=language, source="en-IN").strip()
+    except Exception as exc:  # noqa: BLE001 — she gets the English, we get the log
+        log.warning("localise_failed lang=%s: %s", language, exc)
+        return text
+
+    if not out:
+        return text
+    return out[:limit] if limit else out
 
 
 def _language_name(code: str | None) -> str:

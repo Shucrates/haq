@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+import agent
 import store
 import whatsapp
 
@@ -19,6 +20,25 @@ import whatsapp
 def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "test.db")
     store.init()
+
+
+@pytest.fixture(autouse=True)
+def localised(monkeypatch):
+    """Record what was put through the translator and hand back the English.
+
+    Autouse so no test can reach Sarvam: these cases carry language='mr-IN', and a
+    developer with SARVAM_API_KEY exported would otherwise translate every assertion
+    in this file over the network.
+    """
+    calls = []
+
+    def spy(text, language, limit=None):
+        calls.append((text, language))
+        return text
+
+    agent.localise.cache_clear()
+    monkeypatch.setattr(agent, "localise", spy)
+    return calls
 
 
 SECRET = "test_app_secret"
@@ -168,6 +188,32 @@ def test_ambiguous_reply_re_asks_instead_of_approving(drafted, sent):
     whatsapp._handle_decision("91555", drafted, None, "hmm not sure")
     assert store.get_case(drafted)["approved_at"] is None
     assert sent[-1][0] == "buttons"
+
+
+def test_what_haq_says_is_translated_before_it_is_sent(drafted, sent, localised):
+    """The gap this closes: the questions were in Marathi and everything around them
+    — the confirmation, the approval prompt, the deadline list — was in English."""
+    whatsapp._handle_decision("91555", drafted, "APPROVE", "Yes, file it")
+
+    assert localised, "the reply went out without passing through the translator"
+    text, language = localised[-1]
+    assert language == "mr-IN", "the language must come from the case, never a default"
+    assert "Filed." in text
+
+
+def test_the_approval_buttons_are_translated_too(drafted, localised, monkeypatch):
+    """A Marathi prompt over two English buttons is the same bug, one line lower."""
+    buttons = []
+    monkeypatch.setattr(whatsapp, "send_buttons",
+                        lambda to, body, btns: buttons.append(btns))
+
+    whatsapp._ask_to_file("91555", drafted, "Shall I prepare this for filing?")
+
+    titles = [title for _, title in buttons[0]]
+    assert titles == ["Yes, file it", "No, change it"]  # the spy returns the English
+    assert [ids for ids, _ in buttons[0]] == [whatsapp.APPROVE, whatsapp.REJECT], \
+        "the ids must stay untranslated — the decision is read off the id"
+    assert ("Yes, file it", "mr-IN") in localised
 
 
 def test_button_tap_does_not_get_recorded_as_a_fact(drafted, sent, monkeypatch):

@@ -72,5 +72,68 @@ def test_hitting_the_turn_cap_reports_what_is_still_missing(monkeypatch):
     assert "commercial_decision" in step["facts_pending"]
 
 
+# ------------------------------------------------------------------ localise
+
+
+@pytest.fixture
+def model(monkeypatch):
+    """Count the calls as well as stubbing them — the cache is what keeps this off
+    the wire on every message, so it has to be asserted, not assumed."""
+    calls = []
+
+    def fake_translate(text, target="en-IN", source="auto"):
+        calls.append((text, target))
+        return "अनुवादित"
+
+    agent.localise.cache_clear()
+    monkeypatch.setattr(agent.sarvam, "translate", fake_translate)
+    return calls
+
+
+def test_localise_puts_a_message_into_the_users_language(model):
+    assert agent.localise("Filed. I will watch the clock for you.", "mr-IN") == "अनुवादित"
+    assert model[0][1] == "mr-IN"
+
+
+@pytest.mark.parametrize("language", [None, "", "en-IN"])
+def test_english_speakers_cost_nothing(model, language):
+    text = "Filed. I will watch the clock for you."
+    assert agent.localise(text, language) == text
+    assert model == [], "no call belongs on the English path"
+
+
+def test_repeated_chrome_is_translated_once(model):
+    for _ in range(3):
+        agent.localise("Reading your document…", "mr-IN")
+    assert len(model) == 1, "the fixed strings must not cost a call per message"
+
+
+def test_a_list_keeps_its_lines(model):
+    """Mayura returns one flowing paragraph, so the deadline list has to be fed to
+    it a line at a time or it stops being a list."""
+    out = agent.localise("Filed.\n• Reply due — 2026-11-07\n• Escalate — 2027-02-05", "mr-IN")
+    assert out.count("\n") == 2
+    assert len(model) == 3, "each line is translated, and cached, on its own"
+
+
+def test_a_translation_failure_falls_back_to_english(monkeypatch):
+    agent.localise.cache_clear()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("sarvam down")
+
+    monkeypatch.setattr(agent.sarvam, "translate", boom)
+    text = "Not sending it. Tell me what to change, or send *reset* to start over."
+    assert agent.localise(text, "mr-IN") == text
+
+
+def test_a_button_title_is_cut_to_fit(monkeypatch):
+    """WhatsApp rejects nothing here — it truncates, so an over-long title becomes a
+    half word."""
+    agent.localise.cache_clear()
+    monkeypatch.setattr(agent.sarvam, "translate", lambda *a, **k: "हो" * 40)
+    assert len(agent.localise("Yes, file it", "mr-IN", 20)) == 20
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main(["-v", __file__]))

@@ -206,7 +206,7 @@ def handle_inbound(value: dict, message: dict) -> None:
             return
 
         if not text:
-            send_text(phone, "Send a message or a voice note describing your problem.")
+            _say(phone, case_id, "Send a message or a voice note describing your problem.")
             return
 
         # A draft is already on the table, so this message is a decision about it,
@@ -220,6 +220,18 @@ def handle_inbound(value: dict, message: dict) -> None:
 
     except Exception as exc:  # noqa: BLE001 — a channel must not crash the app
         log.exception("whatsapp_inbound_failed: %s", exc)
+
+
+def _say(phone: str, case_id: str, english: str) -> bool:
+    """Send one message in the language this case chose.
+
+    Every literal HAQ says goes through here, so adding a message never means
+    remembering to translate it. The language is read from the case rather than
+    passed in because the callers already have the case id and nothing else may
+    decide what language a person is spoken to in.
+    """
+    language = (store.get_case(case_id) or {}).get("language")
+    return send_text(phone, agent.localise(english, language))
 
 
 def _debug(exc: Exception) -> str:
@@ -239,7 +251,7 @@ def _debug(exc: Exception) -> str:
 def _handle_document(phone: str, case_id: str, inbound: dict, language: str | None) -> None:
     """Read a letter the user sent. Doc AI is slow, so tell them it's happening —
     silence after sending a document reads as the bot being broken."""
-    send_text(phone, "Reading your document…")
+    _say(phone, case_id, "Reading your document…")
 
     try:
         blob = download_media(inbound["media_id"])
@@ -247,7 +259,13 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
     except Exception as exc:  # noqa: BLE001 — a bad scan must not close the case
         log.warning("document_failed: %s", exc)
         store.save_document(case_id, inbound.get("filename"), "failed", {"error": str(exc)})
-        send_text(phone, "I couldn't read that. Just tell me the details instead." + _debug(exc))
+        # The debug tail is appended AFTER localisation — it is a stack trace for us,
+        # not a sentence for her, and translating it would only make it useless.
+        send_text(
+            phone,
+            agent.localise("I couldn't read that. Just tell me the details instead.", language)
+            + _debug(exc),
+        )
         return
 
     split = documents.to_facts(extracted)
@@ -263,7 +281,9 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
     # silently changes which tier the complaint is maintainable at.
     for item in split["confirm"]:
         lines.append(f"Is this right — {item['field'].replace('_', ' ')}: {item['value']}?")
-    send_text(phone, "\n".join(lines))
+    # The values inside are what she has to check, and Mayura carries dates and
+    # amounts through unchanged (numerals_format=international).
+    send_text(phone, agent.localise("\n".join(lines), language))
 
 
 def _handle_language(phone: str, case_id: str, action: str | None) -> None:
@@ -325,28 +345,48 @@ def _handle_decision(phone: str, case_id: str, action: str | None, text: str) ->
         store.add_event(case_id, "approved", f"whatsapp {phone}")
         store.add_message(case_id, "user", text or "APPROVE")
 
+        # The deadline labels come from the ladder YAML and are English too, so the
+        # whole block goes through together rather than a translated sentence
+        # followed by a list she cannot read.
         lines = ["Filed. I will watch the clock for you."]
         for deadline in store.all_deadlines(case_id):
             lines.append(f"• {deadline['label']} — {deadline['due_on']}")
-        send_text(phone, "\n".join(lines))
+        _say(phone, case_id, "\n".join(lines))
         return
 
     if decision == REJECT:
         # Drop the draft so the next message is treated as input again.
         store.update_case(case_id, draft_text=None)
         store.add_event(case_id, "rejected", f"whatsapp {phone}")
-        send_text(
+        _say(
             phone,
+            case_id,
             "Not sending it. Tell me what to change, or send *reset* to start over.",
         )
         return
 
     # Anything else while a draft is pending: re-ask rather than guess. Approval is
     # the one place in this product where an LLM must not interpret intent.
-    send_buttons(
+    _ask_to_file(phone, case_id, "Please tap one — should I prepare this for filing?")
+
+
+# WhatsApp truncates a button title past 20 characters, and a half-word in Devanagari
+# is worse than none — so the limit is given to the model rather than to a slice.
+BUTTON_TITLE_CHARS = 20
+
+
+def _ask_to_file(phone: str, case_id: str, body: str) -> bool:
+    """The approval buttons, in her language. The ids stay APPROVE / REJECT: the
+    words are translated, the decision is still read off a button id, never off
+    text a model produced."""
+    language = (store.get_case(case_id) or {}).get("language")
+    return send_buttons(
         phone,
-        "Please tap one — should I prepare this for filing?",
-        [(APPROVE, "Yes, file it"), (REJECT, "No, change it")],
+        agent.localise(body, language),
+        [
+            (APPROVE, agent.localise("Yes, file it", language, BUTTON_TITLE_CHARS)),
+            (REJECT, agent.localise("No, change it", language, BUTTON_TITLE_CHARS)),
+        ],
     )
 
 
@@ -402,20 +442,39 @@ def _advance_case(phone: str, text: str) -> None:
     store.update_case(case_id, draft_text=built["body_text"])
     store.add_event(case_id, "draft", f"tier {verdict.current_tier}")
 
+    # The filing itself stays in formal English — it is addressed to the bank, not
+    # to her — so it is introduced in her language rather than dropped on her as a
+    # wall of text she has no way to place.
+    _say(phone, case_id, "This is the complaint I have written for you. Listen to it below.")
     send_text(phone, built["body_text"][:3500])
 
     # She approves a document she cannot read, by hearing it in one she can. A TTS
     # failure must not block the approval, so this is best-effort.
     try:
-        send_voice(phone, built["body_text"], language_code=case.get("language") or "mr-IN")
+        language = case.get("language") or "mr-IN"
+        send_voice(phone, _spoken_readback(built["body_text"], language), language_code=language)
     except Exception as exc:  # noqa: BLE001
         log.warning("readback_failed: %s", exc)
 
-    send_buttons(
-        phone,
-        "Shall I prepare this for filing?",
-        [(APPROVE, "Yes, file it"), (REJECT, "No, change it")],
-    )
+    _ask_to_file(phone, case_id, "Shall I prepare this for filing?")
+
+
+def _spoken_readback(body: str, language: str | None) -> str:
+    """The English filing, in the language it will be read aloud in.
+
+    Mayura rather than 105B: this is the one text that must say exactly what the
+    document says, and a reasoning model asked to "rewrite" a legal body is a
+    reasoning model given the chance to change it. Bulbul was previously handed the
+    English body with a mr-IN voice, which produced Marathi-accented English — the
+    read-back is the whole approval mechanism, so it has to be her language.
+    """
+    if not language or language.startswith("en"):
+        return body
+    try:
+        return sarvam.translate(body, target=language, source="en-IN") or body
+    except Exception as exc:  # noqa: BLE001 — she still hears something
+        log.warning("readback_translate_failed: %s", exc)
+        return body
 
 
 # --------------------------------------------------------------- outbound
