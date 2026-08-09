@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HAQ — stand inside the system</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#262d36; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#4c9aff; --block:#f85149; --ok:#3fb950; --warn:#d29922;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header{padding:20px 28px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font-size:22px;letter-spacing:-.02em}
+  .tag{font:12px var(--mono);color:var(--dim);border:1px solid var(--line);
+       padding:2px 8px;border-radius:999px}
+  main{max-width:1100px;margin:0 auto;padding:24px 28px 80px;
+       display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+  section.wide{grid-column:1/-1}
+  h2{margin:0 0 14px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim)}
+  button{background:var(--accent);color:#04121f;border:0;border-radius:8px;
+         padding:11px 18px;font-size:15px;font-weight:650;cursor:pointer}
+  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input,textarea{background:#0b0f14;border:1px solid var(--line);color:var(--ink);
+                 border-radius:8px;padding:11px;font-size:15px;width:100%;font-family:inherit}
+  .muted{color:var(--dim);font-size:14px}
+  .mono{font-family:var(--mono);font-size:13px}
+  pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:14px;
+      overflow:auto;font-size:12.5px;max-height:340px;margin:0}
+  .q{font-size:21px;line-height:1.4;margin:6px 0 4px}
+  .facts div{display:flex;justify-content:space-between;gap:12px;padding:6px 0;
+             border-bottom:1px solid var(--line);font-size:14px}
+  .facts div:last-child{border-bottom:0}
+  .pending{color:var(--warn)}
+  /* The refusal — the moment the demo is built around. */
+  .refusal{border:2px solid var(--block);background:rgba(248,81,73,.07);
+           border-radius:12px;padding:22px;margin-top:6px}
+  .refusal h3{margin:0 0 8px;color:var(--block);font-size:26px;letter-spacing:-.02em}
+  .clause{font-family:var(--mono);font-size:14px;color:var(--block)}
+  .maintainable{border:2px solid var(--ok);background:rgba(63,185,80,.07);
+                border-radius:12px;padding:22px;margin-top:6px}
+  .maintainable h3{margin:0 0 8px;color:var(--ok);font-size:26px}
+  a{color:var(--accent)}
+  .dl{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .fired{color:var(--warn)}
+  .pill{font:12px var(--mono);padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+  .rec{background:var(--block);color:#fff}
+  /* onboarding */
+  .bubble{background:#0b0f14;border:1px solid var(--line);border-radius:14px 14px 14px 4px;
+          padding:14px 16px;max-width:640px;font-size:16px}
+  .chips{display:flex;gap:9px;flex-wrap:wrap;margin-top:10px}
+  .chip{background:transparent;color:var(--ink);border:1px solid var(--line);
+        border-radius:999px;padding:9px 16px;font-size:16px;cursor:pointer}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip .en{color:var(--dim);font-size:12px;margin-left:7px}
+  .chip.on{border-color:var(--ok);color:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <h1>HAQ</h1>
+  <span class="tag">stand inside the system</span>
+  <span class="tag" id="mode">mode: …</span>
+  <span class="tag" id="caseTag">no case</span>
+</header>
+
+<main>
+  <!-- 0:00 — onboarding. One tap: the message is already written. -->
+  <section class="wide" id="onboardSection">
+    <h2>0 · Start</h2>
+    <div class="bubble">Hi, I'm HAQ. I help you complain to banks and public offices —
+      and I tell you when a complaint would be thrown out.</div>
+    <div class="row" style="margin-top:12px">
+      <input id="prefillIn" value="">
+      <button id="prefillBtn">Send ▶</button>
+    </div>
+    <div id="langBox" style="margin-top:16px"></div>
+  </section>
+
+  <!-- 0:40 — Sunita speaks -->
+  <section>
+    <h2>1 · Voice intake</h2>
+    <div class="row">
+      <button id="recBtn" disabled>● Record</button>
+      <span class="muted" id="recStatus">Choose a language first.</span>
+    </div>
+    <div style="margin-top:14px">
+      <input id="textIn" placeholder="…or type it here (no microphone needed)" disabled>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="textBtn" disabled>Submit text</button>
+        <label class="ghost" id="docLabel"
+               style="border:1px solid var(--line);border-radius:8px;padding:11px 18px;
+                      font-size:15px;cursor:pointer;opacity:.4">
+          📄 Send the bank's letter
+          <input type="file" id="docIn" accept="image/*,.pdf" style="display:none" disabled>
+        </label>
+      </div>
+    </div>
+    <div id="intakeOut" style="margin-top:16px"></div>
+    <div id="docOut" style="margin-top:12px"></div>
+  </section>
+
+  <!-- 1:30 — Interrogation -->
+  <section>
+    <h2>2 · Interrogation</h2>
+    <div id="qBox"><span class="muted">Waiting for intake.</span></div>
+    <div class="row" style="margin-top:12px">
+      <input id="answerIn" placeholder="Your answer" disabled>
+      <button id="answerBtn" disabled>Answer</button>
+    </div>
+    <div class="facts" id="factsOut" style="margin-top:16px"></div>
+  </section>
+
+  <!-- 2:20 — THE REFUSAL -->
+  <section class="wide">
+    <h2>3 · Maintainability — the ladder engine decides, not the model</h2>
+    <div class="row">
+      <button id="resolveBtn" disabled>Resolve</button>
+      <span class="muted">Pure function · no LLM · no network</span>
+    </div>
+    <div id="verdictOut" style="margin-top:14px"></div>
+  </section>
+
+  <!-- 3:30 — The artifact -->
+  <section>
+    <h2>4 · The document</h2>
+    <div class="row">
+      <button id="draftBtn" disabled>Draft the letter</button>
+      <button class="ghost" id="speakBtn" disabled>🔊 Read it aloud</button>
+      <button class="ghost" id="approveBtn" disabled>हो — approve</button>
+    </div>
+    <div id="draftOut" style="margin-top:14px"></div>
+    <audio id="player" controls style="width:100%;margin-top:12px;display:none"></audio>
+  </section>
+
+  <!-- 4:30 — Time travel -->
+  <section>
+    <h2>5 · Time travel</h2>
+    <div class="row">
+      <button id="advBtn" disabled>Advance 31 days</button>
+      <span class="muted" id="clock"></span>
+    </div>
+    <div id="deadlinesOut" style="margin-top:14px"></div>
+    <div id="eventsOut" style="margin-top:14px"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let caseId = null, askingFor = null, mediaRecorder = null, chunks = [];
+
+const api = async (path, opts={}) => {
+  const res = await fetch(path, opts);
+  if (!res.ok) { const t = await res.text(); throw new Error(t.slice(0,300)); }
+  return res.json();
+};
+const jpost = (path, body) => api(path, {
+  method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+});
+
+fetch('/api/health').then(r=>r.json()).then(h=>{
+  $('#mode').textContent = 'mode: ' + h.mode + (h.whatsapp ? ' · whatsapp on' : '');
+}).catch(()=>{});
+
+// ---- 0. onboarding ---------------------------------------------------------
+// The message is written for her. Her whole first action is pressing send.
+let languages = [];
+fetch('/api/languages').then(r=>r.json()).then(d=>{
+  languages = d.languages;
+  $('#prefillIn').value = d.prefill;
+}).catch(()=>{});
+
+$('#prefillBtn').onclick = async () => {
+  $('#prefillBtn').disabled = true;
+  try {
+    const d = await jpost('/api/start', {});
+    caseId = d.case_id;
+    $('#caseTag').textContent = 'case ' + caseId;
+    languages = d.languages;
+    renderLanguages();
+  } catch(e){ $('#langBox').textContent = 'Failed: ' + e.message; $('#prefillBtn').disabled = false; }
+};
+
+function renderLanguages(){
+  $('#langBox').innerHTML =
+    `<div class="bubble">Choose your language / भाषा निवडा</div>
+     <div class="chips">${languages.map(l =>
+       `<button class="chip" data-code="${l.code}">${escapeHtml(l.native)}<span class="en">${l.english}</span></button>`
+     ).join('')}</div>`;
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.onclick = () => pickLanguage(chip.dataset.code, chip);
+  });
+}
+
+async function pickLanguage(code, chip){
+  const r = await jpost('/api/onboard', {case_id: caseId, language: code});
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  chip.classList.add('on');
+  $('#langBox').insertAdjacentHTML('beforeend',
+    `<div class="bubble" style="margin-top:12px">${escapeHtml(r.greeting)}</div>`);
+  // Intake is locked until a language exists — we never guess one.
+  ['recBtn','textIn','textBtn','docIn'].forEach(id => $('#'+id).disabled = false);
+  $('#docLabel').style.opacity = 1;
+  $('#recStatus').textContent = 'Speak your grievance. Keep it under 30 seconds.';
+}
+
+// ---- document intake (Sarvam Doc AI) ---------------------------------------
+$('#docIn').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file || !caseId) return;
+  $('#docOut').innerHTML = '<span class="muted">Reading your document…</span>';
+  const fd = new FormData();
+  fd.append('document', file);
+  fd.append('case_id', caseId);
+  try {
+    const d = await api('/api/document', {method:'POST', body:fd});
+    const known = Object.entries(d.facts || {}).map(([k,v]) =>
+      `<div><span class="mono">${k}</span><span>${escapeHtml(String(v))}</span></div>`).join('');
+    // Low-confidence fields are asked about, never written in silently.
+    const ask = (d.confirm || []).map(c =>
+      `<div><span class="mono pending">${c.field}</span>
+        <span class="pending">${escapeHtml(String(c.value))} —
+        ${c.confidence == null ? 'unsure' : (c.confidence*100).toFixed(0)+'% confident, confirm?'}</span></div>`
+    ).join('');
+    $('#docOut').innerHTML =
+      `<div class="muted">${escapeHtml(d.summary || '')}</div><div class="facts">${known}${ask}</div>`;
+  } catch(err){ $('#docOut').textContent = 'Could not read that: ' + err.message; }
+};
+
+function setCase(data){
+  caseId = data.case_id;
+  $('#caseTag').textContent = 'case ' + caseId;
+  const conf = data.confidence != null ? ` · confidence ${(data.confidence*100).toFixed(0)}%` : '';
+  $('#intakeOut').innerHTML =
+    `<div class="mono muted">${data.language}${conf}</div>
+     <p style="font-size:18px">${escapeHtml(data.transcript)}</p>
+     <span class="pill">${data.classification}</span>`;
+  ['answerIn','answerBtn','resolveBtn'].forEach(id=>$('#'+id).disabled=false);
+  nextQuestion();
+}
+
+const escapeHtml = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ---- 1. intake -------------------------------------------------------------
+$('#recBtn').onclick = async () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  // Saaras accepts webm/opus directly — no browser-side WAV encoder needed.
+  mediaRecorder = new MediaRecorder(stream);
+  chunks = [];
+  mediaRecorder.ondataavailable = e => chunks.push(e.data);
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach(t=>t.stop());
+    $('#recBtn').classList.remove('rec');
+    $('#recBtn').textContent = '● Record';
+    $('#recStatus').textContent = 'Transcribing…';
+    const fd = new FormData();
+    fd.append('audio', new Blob(chunks, {type:'audio/webm'}), 'audio.webm');
+    fd.append('lang', 'unknown');
+    fd.append('case_id', caseId);
+    try {
+      setCase(await api('/api/intake', {method:'POST', body:fd}));
+      $('#recStatus').textContent = 'Done.';
+    } catch(e){ $('#recStatus').textContent = 'Failed: ' + e.message; }
+  };
+  mediaRecorder.start();
+  $('#recBtn').classList.add('rec');
+  $('#recBtn').textContent = '■ Stop';
+  $('#recStatus').textContent = 'Recording…';
+};
+
+$('#textBtn').onclick = async () => {
+  const text = $('#textIn').value.trim();
+  if (!text) return;
+  try { setCase(await jpost('/api/intake_text', {text, case_id: caseId})); }
+  catch(e){ $('#intakeOut').textContent = 'Failed: ' + e.message; }
+};
+
+// ---- 2. interrogation ------------------------------------------------------
+async function nextQuestion(answer){
+  const body = {case_id: caseId};
+  if (answer && askingFor) { body.text = answer; body.asking_for = askingFor; }
+  const step = await jpost('/api/turn', body);
+  renderFacts(step.facts_known, step.facts_pending);
+  if (step.done) {
+    askingFor = null;
+    $('#qBox').innerHTML = '<span class="muted">Fact sheet complete. Resolve the ladder.</span>';
+    $('#answerIn').disabled = true; $('#answerBtn').disabled = true;
+  } else {
+    askingFor = step.asking_for;
+    $('#qBox').innerHTML =
+      `<div class="q">${escapeHtml(step.question_native || step.question)}</div>
+       <div class="muted">${escapeHtml(step.question)}</div>`;
+  }
+}
+
+$('#answerBtn').onclick = async () => {
+  const val = $('#answerIn').value.trim(); if (!val) return;
+  $('#answerIn').value = '';
+  try { await nextQuestion(val); } catch(e){ $('#qBox').textContent = 'Failed: ' + e.message; }
+};
+$('#answerIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('#answerBtn').click(); });
+
+function renderFacts(known, pending){
+  const rows = Object.entries(known||{}).map(([k,v]) =>
+    `<div><span class="mono">${k}</span><span>${escapeHtml(String(v))}</span></div>`);
+  (pending||[]).forEach(p =>
+    rows.push(`<div><span class="mono pending">${p}</span><span class="pending">needed</span></div>`));
+  $('#factsOut').innerHTML = rows.join('') || '<span class="muted">No facts yet.</span>';
+}
+
+// ---- 3. the refusal --------------------------------------------------------
+$('#resolveBtn').onclick = async () => {
+  const v = await jpost('/api/resolve', {case_id: caseId});
+  const src = `<div style="margin-top:10px"><a href="${v.source_url}" target="_blank">${v.source_url}</a>
+               <span class="muted"> · verified ${v.verified_on} · ${v.ladder_id} v${v.ladder_version}</span></div>`;
+  if (v.maintainable) {
+    $('#verdictOut').innerHTML =
+      `<div class="maintainable"><h3>MAINTAINABLE · tier ${v.current_tier}</h3>
+        <div>${escapeHtml(v.next_action)}</div>
+        <div class="muted" style="margin-top:6px">Haq score ${v.haq_score}</div>${src}</div>`;
+  } else {
+    const clauses = v.blocked_by.map(b=>`<span class="clause">${b}</span>`).join(' · ');
+    $('#verdictOut').innerHTML =
+      `<div class="refusal"><h3>BLOCKED</h3>
+        <div>${clauses}</div>
+        ${v.refusal_native ? `<p class="q">${escapeHtml(v.refusal_native)}</p>` : ''}
+        <ul>${v.blocked_messages.map(m=>`<li>${escapeHtml(m)}</li>`).join('')}</ul>
+        <div>${v.redirect_to ? 'Go to tier ' + v.redirect_to + ' first.' : ''}</div>${src}</div>`;
+  }
+  renderDeadlines(v.deadlines);
+  ['draftBtn','advBtn'].forEach(id=>$('#'+id).disabled=false);
+};
+
+// ---- 4. the artifact -------------------------------------------------------
+let draftText = '';
+$('#draftBtn').onclick = async () => {
+  $('#draftOut').innerHTML = '<span class="muted">Drafting…</span>';
+  const d = await jpost('/api/draft', {case_id: caseId});
+  draftText = d.body_text;
+  const stripped = d.stripped_citations.length
+    ? `<div class="muted" style="color:var(--warn)">Renderer deleted ${d.stripped_citations.length}
+       ungrounded citation(s): ${d.stripped_citations.join(', ')}</div>` : '';
+  $('#draftOut').innerHTML =
+    `<div class="row"><span class="pill">${d.tier_name}</span>
+      <span class="pill">${d.grounded ? 'fully grounded' : 'citations stripped'}</span>
+      <a href="${d.pdf_url}" target="_blank">Download PDF</a></div>
+     ${stripped}
+     <pre style="margin-top:12px">${escapeHtml(d.body_text)}</pre>
+     <div class="muted" style="margin-top:8px">Cited (verified): ${
+       d.citations.map(c=>`<a href="${c.source_url}" target="_blank">${c.id}</a>`).join(' · ') || 'none'}</div>
+     ${(d.web_context && d.web_context.length) ? `<div class="muted" style="margin-top:6px">
+       Background reading — <b>not cited, not verified</b>: ${
+       d.web_context.map(w=>`<a href="${w.url}" target="_blank">${escapeHtml(w.title)}</a>`).join(' · ')}</div>` : ''}`;
+  $('#speakBtn').disabled = false; $('#approveBtn').disabled = false;
+};
+
+$('#speakBtn').onclick = async () => {
+  $('#speakBtn').textContent = '…';
+  try {
+    // Language comes from the case, not hardcoded here.
+    const r = await jpost('/api/speak', {text: draftText, case_id: caseId});
+    const player = $('#player');
+    player.src = 'data:audio/wav;base64,' + r.audio_base64;
+    player.style.display = 'block';
+    player.play();
+  } finally { $('#speakBtn').textContent = '🔊 Read it aloud'; }
+};
+
+$('#approveBtn').onclick = async () => {
+  const r = await jpost('/api/approve', {case_id: caseId});
+  $('#approveBtn').textContent = '✓ approved ' + r.approved_at.slice(11,16);
+  $('#approveBtn').disabled = true;
+};
+
+// ---- 5. time travel --------------------------------------------------------
+$('#advBtn').onclick = async () => {
+  const r = await jpost('/api/advance', {case_id: caseId, days: 31});
+  $('#clock').textContent = 'today is ' + r.today + ' (+' + r.clock_offset_days + 'd)';
+  renderDeadlines(r.new_deadlines);
+  $('#eventsOut').innerHTML = r.events.map(e =>
+    `<div class="dl"><span class="mono">${e.kind}</span><span>${escapeHtml(e.detail)}</span></div>`).join('');
+  if (r.new_messages.length) {
+    $('#eventsOut').innerHTML +=
+      r.new_messages.map(m=>`<p class="q fired">⚖︎ ${escapeHtml(m.text)}</p>`).join('');
+  }
+};
+
+function renderDeadlines(list){
+  $('#deadlinesOut').innerHTML = (list||[]).map(d => {
+    const due = d.due_on || d.dueOn;
+    return `<div class="dl ${d.fired_at?'fired':''}"><span>${escapeHtml(d.label)}</span>
+            <span class="mono">${due}</span></div>`;
+  }).join('') || '<span class="muted">No deadlines yet.</span>';
+}
+</script>
+</body>
+</html>

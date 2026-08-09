@@ -1,0 +1,98 @@
+[
+  {
+    "id": "rbi_bsbda_no_amc",
+    "keywords": ["bsbda", "jan dhan", "annual maintenance", "amc", "zero balance", "basic savings"],
+    "text": "RBI's Master Direction on Basic Savings Bank Deposit Accounts does not permit the levy of an annual maintenance charge on a BSBDA.",
+    "source_url": "https://rbi.org.in/Scripts/BS_ViewMasCirculardetails.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbi_min_balance_bsbda",
+    "keywords": ["minimum balance", "penalty", "bsbda", "shortfall"],
+    "text": "A Basic Savings Bank Deposit Account carries no minimum balance requirement, and no penal charge may be levied for non-maintenance of balance.",
+    "source_url": "https://rbi.org.in/Scripts/BS_ViewMasCirculardetails.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbi_unauthorised_electronic_txn",
+    "keywords": ["unauthorised", "fraud", "debited", "electronic transaction", "otp", "zero liability"],
+    "text": "Where an unauthorised electronic transaction arises from third-party breach and is reported within three working days, the customer's liability is nil and the amount must be reversed.",
+    "source_url": "https://rbi.org.in/Scripts/NotificationUser.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbi_txn_reversal_timeline",
+    "keywords": ["reversal", "shadow credit", "ten days", "failed transaction", "atm"],
+    "text": "The amount involved in a disputed electronic transaction must be shadow-credited to the customer's account within ten working days of notification.",
+    "source_url": "https://rbi.org.in/Scripts/NotificationUser.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbios_written_complaint_first",
+    "keywords": ["ombudsman", "maintainable", "written complaint", "escalate", "rejected"],
+    "text": "A complaint is maintainable before the RBI Ombudsman only after a written complaint has first been made to the regulated entity.",
+    "source_url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbios_ninety_day_window",
+    "keywords": ["90 days", "ninety days", "time barred", "window", "limitation", "escalation"],
+    "text": "A complaint to the Ombudsman must be made within ninety days of the regulated entity's reply, or of the lapse of the period allowed for that reply.",
+    "source_url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbios_thirty_day_reply",
+    "keywords": ["30 days", "thirty days", "bank reply", "response time", "premature"],
+    "text": "A regulated entity has thirty days to reply to a written complaint before the matter may be escalated to the Ombudsman.",
+    "source_url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbios_court_exclusion",
+    "keywords": ["court", "tribunal", "arbitration", "pending", "sub judice"],
+    "text": "The Ombudsman shall not entertain a complaint where the subject matter is pending before, or has been decided by, any court, tribunal or arbitrator.",
+    "source_url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbios_commercial_judgement",
+    "keywords": ["commercial", "loan refused", "credit decision", "business judgement"],
+    "text": "A grievance arising out of a regulated entity's commercial judgement or business decision is outside the Ombudsman's jurisdiction.",
+    "source_url": "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rbi_internal_ombudsman",
+    "keywords": ["internal ombudsman", "nodal officer", "grievance redressal", "escalation desk"],
+    "text": "Banks are required to appoint an Internal Ombudsman to whom partly or wholly rejected complaints are automatically escalated before the customer is given a final reply.",
+    "source_url": "https://rbi.org.in/Scripts/NotificationUser.aspx",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rti_s7_thirty_days",
+    "keywords": ["rti", "pio", "thirty days", "information request", "no response"],
+    "text": "Section 7(1) of the Right to Information Act 2005 requires a Public Information Officer to dispose of a request within thirty days of receipt.",
+    "source_url": "https://rti.gov.in/",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  },
+  {
+    "id": "rti_s19_first_appeal",
+    "keywords": ["rti", "first appeal", "appellate authority", "thirty days appeal"],
+    "text": "Section 19(1) of the Right to Information Act 2005 allows a first appeal to the designated Appellate Authority within thirty days of the PIO's decision or of the expiry of the response period.",
+    "source_url": "https://rti.gov.in/",
+    "verified_on": "2026-08-08",
+    "verified_by": "UNVERIFIED"
+  }
+]

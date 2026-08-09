@@ -1,0 +1,107 @@
+# RB-IOS escalation ladder. This file is DATA, not code — when RBI changes the
+# scheme this is a pull request, not a retrain. Authored by a paralegal, not an
+# engineer.
+# ---------------------------------------------------------------------------
+# VERIFY BEFORE DEMO: every source_url and date below must be checked by a
+# named human and their name put in verified_by. Do not present unverified
+# legal content to judges. See README "Legal verification" .
+# ---------------------------------------------------------------------------
+
+ladder_id: rbi_rbios_2026
+version: 2026.1
+name: RBI Integrated Ombudsman Scheme
+effective_from: 2026-07-01
+source_url: https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx
+verified_on: 2026-08-08
+verified_by: UNVERIFIED
+
+grievance_classes:
+  - banking
+
+target_tier: 2
+
+required_facts:
+  - tier1_written_complaint
+  # Needed for BOTH the 30-day waiting period and the bank_reply_due deadline.
+  # Only asked when a written complaint actually exists — see agent._applicable.
+  - tier1_filed_on
+  - last_communication_on
+
+tiers:
+  - tier: 1
+    name: the bank's own Internal Ombudsman / Nodal Officer
+    description: A written complaint to the bank. Nothing escalates until this exists.
+  - tier: 2
+    name: the RBI Ombudsman (RB-IOS)
+    description: The regulator. Only maintainable once tier 1 is exhausted.
+  - tier: 3
+    name: the Appellate Authority, Department of Supervision, RBI
+    description: Appeal against an Ombudsman award.
+
+exclusions:
+  - id: tier1_not_exhausted
+    rule: tier1_not_exhausted
+    redirect_to: 1
+    message: >-
+      You have not yet made a written complaint to the bank. The Ombudsman will
+      reject the complaint outright unless the bank has been given the chance to
+      respond in writing first.
+
+  - id: time_barred
+    rule: time_barred
+    window_days: 90
+    redirect_to: null
+    message: >-
+      More than 90 days have passed since the bank's last communication. Under the
+      2026 scheme the escalation window is 90 days, reduced from one year.
+
+  - id: pending_in_court
+    rule: pending_in_court
+    redirect_to: null
+    message: >-
+      The Ombudsman cannot hear a matter that is already pending before a court,
+      tribunal or arbitrator.
+
+  - id: commercial_decision
+    rule: commercial_decision
+    redirect_to: null
+    message: >-
+      A bank's commercial judgement (for example a refusal to lend) is outside the
+      Ombudsman's remit.
+
+  - id: waiting_period_not_elapsed
+    rule: waiting_period_not_elapsed
+    wait_days: 30
+    redirect_to: 1
+    message: >-
+      The bank has 30 days to reply to your written complaint. That period has not
+      elapsed yet, so the Ombudsman would treat the complaint as premature.
+
+deadlines:
+  - id: rbios_90_day_window
+    label: Last day to escalate to the RBI Ombudsman
+    from: later_of_filed_and_last_communication
+    days: 90
+    tier: 2
+  - id: bank_reply_due
+    label: Bank's 30-day deadline to respond to your written complaint
+    from: tier1_filed_on
+    days: 30
+    tier: 1
+
+citations:
+  - id: rbi_bsbda_no_amc
+    text: >-
+      RBI's Master Direction on Basic Savings Bank Deposit Accounts does not permit
+      levy of an annual maintenance charge on a BSBDA.
+    source_url: https://rbi.org.in/Scripts/BS_ViewMasCirculardetails.aspx
+    verified_on: 2026-08-08
+  - id: rbios_scope
+    text: >-
+      A complaint is maintainable before the Ombudsman only after a written
+      complaint has been made to the regulated entity.
+    source_url: https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx
+    verified_on: 2026-08-08
+
+scoring:
+  material_amount_inr: 10000
