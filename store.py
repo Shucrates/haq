@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS cases (
     turns         INTEGER NOT NULL DEFAULT 0,
     clock_offset_days INTEGER NOT NULL DEFAULT 0,
     draft_text    TEXT,
-    approved_at   TEXT
+    approved_at   TEXT,
+    -- Who may read this case. A random per-browser token for web cases, "wa:<phone>"
+    -- for WhatsApp. NULL means nobody: a case_id alone is not a credential.
+    owner_token   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -114,6 +117,11 @@ def connect() -> sqlite3.Connection:
 def init() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS is a no-op on an existing haq.db, so a database
+        # from before owner_token existed would keep a schema the queries assume.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(cases)")}
+        if "owner_token" not in columns:
+            conn.execute("ALTER TABLE cases ADD COLUMN owner_token TEXT")
 
 
 def _now() -> str:
@@ -123,12 +131,12 @@ def _now() -> str:
 # ------------------------------------------------------------------- cases
 
 
-def create_case(channel: str = "web") -> str:
+def create_case(channel: str = "web", owner_token: str | None = None) -> str:
     case_id = uuid.uuid4().hex[:12]
     with connect() as conn:
         conn.execute(
-            "INSERT INTO cases (id, created_at, channel) VALUES (?, ?, ?)",
-            (case_id, _now(), channel),
+            "INSERT INTO cases (id, created_at, channel, owner_token) VALUES (?, ?, ?, ?)",
+            (case_id, _now(), channel, owner_token),
         )
     return case_id
 
@@ -247,7 +255,9 @@ def case_for_phone(phone: str) -> str:
         row = conn.execute("SELECT case_id FROM wa_sessions WHERE phone = ?", (phone,)).fetchone()
         if row:
             return row["case_id"]
-    case_id = create_case(channel="whatsapp")
+    # Owned by the number, never by a browser cookie — so no web client can reach
+    # a WhatsApp case by guessing its id.
+    case_id = create_case(channel="whatsapp", owner_token=f"wa:{phone}")
     with connect() as conn:
         conn.execute(
             "INSERT INTO wa_sessions (phone, case_id, updated_at) VALUES (?,?,?)",

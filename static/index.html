@@ -158,10 +158,28 @@ const $ = s => document.querySelector(s);
 let caseId = null, askingFor = null, mediaRecorder = null, chunks = [];
 
 const api = async (path, opts={}) => {
-  const res = await fetch(path, opts);
-  if (!res.ok) { const t = await res.text(); throw new Error(t.slice(0,300)); }
-  return res.json();
+  const res = await fetch(path, opts);   // same-origin: the session cookie rides along
+  const text = await res.text();
+  let body = null; try { body = JSON.parse(text); } catch(_) {}
+  if (!res.ok) {
+    // Carry the status and the parsed body: a 409 from /api/draft IS the refusal,
+    // and a silent throw here would leave the user staring at "Drafting…".
+    const err = new Error(text.slice(0,300));
+    err.status = res.status; err.body = body;
+    throw err;
+  }
+  return body;
 };
+
+// Every case route answers 404 to a browser that does not hold the case's session.
+function sessionLost(e){
+  if (e.status !== 404) return false;
+  $('#verdictOut').innerHTML =
+    `<div class="refusal"><h3>SESSION LOST</h3>
+      <div>This browser no longer holds the session that opened this case.
+      Reload and start a new one.</div></div>`;
+  return true;
+}
 const jpost = (path, body) => api(path, {
   method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
 });
@@ -319,7 +337,15 @@ function renderFacts(known, pending){
 
 // ---- 3. the refusal --------------------------------------------------------
 $('#resolveBtn').onclick = async () => {
-  const v = await jpost('/api/resolve', {case_id: caseId});
+  try {
+    const v = await jpost('/api/resolve', {case_id: caseId});
+    renderVerdict(v);
+    ['draftBtn','advBtn'].forEach(id=>$('#'+id).disabled=false);
+  } catch(e){ if (!sessionLost(e)) throw e; }
+};
+
+// Shared by /api/resolve and by the 409 /api/draft returns when it refuses.
+function renderVerdict(v){
   const src = `<div style="margin-top:10px"><a href="${v.source_url}" target="_blank">${v.source_url}</a>
                <span class="muted"> · verified ${v.verified_on} · ${v.ladder_id} v${v.ladder_version}</span></div>`;
   if (v.maintainable) {
@@ -328,7 +354,8 @@ $('#resolveBtn').onclick = async () => {
         <div>${escapeHtml(v.next_action)}</div>
         <div class="muted" style="margin-top:6px">Haq score ${v.haq_score}</div>${src}</div>`;
   } else {
-    const clauses = v.blocked_by.map(b=>`<span class="clause">${b}</span>`).join(' · ');
+    const clauses = (v.blocked_by.length ? v.blocked_by : v.facts_pending)
+      .map(b=>`<span class="clause">${b}</span>`).join(' · ');
     $('#verdictOut').innerHTML =
       `<div class="refusal"><h3>BLOCKED</h3>
         <div>${clauses}</div>
@@ -337,14 +364,28 @@ $('#resolveBtn').onclick = async () => {
         <div>${v.redirect_to ? 'Go to tier ' + v.redirect_to + ' first.' : ''}</div>${src}</div>`;
   }
   renderDeadlines(v.deadlines);
-  ['draftBtn','advBtn'].forEach(id=>$('#'+id).disabled=false);
-};
+}
 
 // ---- 4. the artifact -------------------------------------------------------
 let draftText = '';
 $('#draftBtn').onclick = async () => {
   $('#draftOut').innerHTML = '<span class="muted">Drafting…</span>';
-  const d = await jpost('/api/draft', {case_id: caseId});
+  let d;
+  try {
+    d = await jpost('/api/draft', {case_id: caseId});
+  } catch(e) {
+    $('#draftOut').innerHTML = '';
+    if (sessionLost(e)) return;
+    // 409 is not an error state, it is the product working. Show the refusal.
+    if (e.status === 409 && e.body) {
+      renderVerdict(e.body);
+      $('#draftOut').innerHTML =
+        `<div class="refusal">No document produced. HAQ will not draft a complaint
+          that would be thrown out.</div>`;
+      return;
+    }
+    throw e;
+  }
   draftText = d.body_text;
   const stripped = d.stripped_citations.length
     ? `<div class="muted" style="color:var(--warn)">Renderer deleted ${d.stripped_citations.length}

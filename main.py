@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import base64
 import os
+import re
+import secrets
 from datetime import date, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,9 +40,43 @@ store.init()
 # ------------------------------------------------------------------ helpers
 
 
-def _case_or_404(case_id: str) -> dict:
-    case = store.get_case(case_id)
-    if case is None:
+COOKIE_NAME = "haq_sid"
+COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # a legal case outlives a browser session
+
+# case_id is uuid4().hex[:12] (store.create_case). Anything else cannot name a case,
+# and rejecting it early keeps unvalidated input out of the PDF path lookup.
+CASE_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def _session_token(request: Request) -> str:
+    """This browser's token, minted on first contact. One token per browser, not per
+    case — a browser owns every case it opened."""
+    return request.cookies.get(COOKIE_NAME) or secrets.token_urlsafe(32)
+
+
+def _set_session_cookie(response, token: str, request: Request) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=COOKIE_MAX_AGE,
+    )
+
+
+def _owned_case(case_id: str, request: Request) -> dict:
+    """The case this caller is allowed to touch, or 404.
+
+    404 and not 403, deliberately: a 403 confirms the id names a real case, which
+    turns a blind guess into a probe. Missing and forbidden must look identical.
+
+    Fails closed on a NULL owner_token — a case from before ownership existed is
+    unreachable rather than public.
+    """
+    token = request.cookies.get(COOKIE_NAME)
+    case = store.get_case(case_id) if CASE_ID.fullmatch(case_id or "") else None
+    if case is None or not token or case.get("owner_token") != token:
         raise HTTPException(status_code=404, detail=f"unknown case {case_id}")
     return case
 
@@ -120,14 +156,17 @@ def verdict_json(verdict) -> dict:
 
 
 @app.post("/api/intake")
-def intake(audio: UploadFile = File(...), lang: str = Form("unknown"),
-           case_id: str = Form(None)):
+def intake(request: Request, response: Response, audio: UploadFile = File(...),
+           lang: str = Form("unknown"), case_id: str = Form(None)):
     """Voice in -> transcript, language, classification. Opens the demo.
 
     The chosen language wins; Saaras' detection is kept as a cross-check and
     surfaced when the two disagree, rather than silently overriding the choice.
     """
-    case = _case_or_404(case_id) if case_id else None
+    token = _session_token(request)
+    _set_session_cookie(response, token, request)
+
+    case = _owned_case(case_id, request) if case_id else None
     chosen = (case or {}).get("language")
 
     raw = audio.file.read()
@@ -138,7 +177,7 @@ def intake(audio: UploadFile = File(...), lang: str = Form("unknown"),
     )
 
     if case_id is None:
-        case_id = store.create_case(channel="web")
+        case_id = store.create_case(channel="web", owner_token=token)
 
     classified = agent.classify(heard["transcript"])
 
@@ -174,28 +213,35 @@ class TextIntake(BaseModel):
 
 
 @app.post("/api/intake_text")
-def intake_text(payload: TextIntake):
+def intake_text(payload: TextIntake, request: Request, response: Response):
     """Same as /api/intake but for typed text — used by WhatsApp and by anyone
     testing without a microphone.
 
     A language must already be chosen. Passing one inline onboards the case in the
     same call, which is what the tests and the WhatsApp adapter do.
     """
+    token = _session_token(request)
+    _set_session_cookie(response, token, request)
+
     if payload.case_id:
-        case = _case_or_404(payload.case_id)
+        case = _owned_case(payload.case_id, request)
         case_id = payload.case_id
     else:
-        case_id = store.create_case(channel="web")
+        case_id = store.create_case(channel="web", owner_token=token)
         case = store.get_case(case_id)
 
     language = payload.language or case.get("language")
     if not language:
         # Never guess. An unonboarded case gets the picker, not an English default.
-        return JSONResponse(
+        picker = JSONResponse(
             status_code=409,
             content={"needs_language": True, "case_id": case_id,
                      "languages": onboarding.as_json()},
         )
+        # Returning a Response directly bypasses the injected `response`, so the
+        # cookie has to be set here or the case we just minted is unreachable.
+        _set_session_cookie(picker, token, request)
+        return picker
 
     classified = agent.classify(payload.text)
     store.update_case(
@@ -226,9 +272,11 @@ def languages():
 
 
 @app.post("/api/start")
-def start():
+def start(request: Request, response: Response):
     """First contact. Creates a case with no language yet — the picker comes next."""
-    case_id = store.create_case(channel="web")
+    token = _session_token(request)
+    _set_session_cookie(response, token, request)
+    case_id = store.create_case(channel="web", owner_token=token)
     return {
         "case_id": case_id,
         "prefill": onboarding.PREFILL_TEXT,
@@ -242,9 +290,9 @@ class Onboard(BaseModel):
 
 
 @app.post("/api/onboard")
-def onboard(payload: Onboard):
+def onboard(payload: Onboard, request: Request):
     """Record the chosen language and hand back the first prompt in it."""
-    _case_or_404(payload.case_id)
+    _owned_case(payload.case_id, request)
     if not onboarding.is_supported(payload.language):
         raise HTTPException(status_code=400, detail=f"unsupported language {payload.language}")
     store.update_case(payload.case_id, language=payload.language)
@@ -266,14 +314,14 @@ class Turn(BaseModel):
 
 
 @app.post("/api/turn")
-def turn(payload: Turn):
+def turn(payload: Turn, request: Request):
     """One question per turn, filling the fact sheet. STATE: COLLECTING."""
-    case = _case_or_404(payload.case_id)
+    case = _owned_case(payload.case_id, request)
     required = required_facts_for(case)
 
     if payload.text and payload.asking_for:
         agent.record_answer(payload.case_id, payload.asking_for, payload.text)
-        case = _case_or_404(payload.case_id)
+        case = _owned_case(payload.case_id, request)
 
     return agent.next_question(payload.case_id, required)
 
@@ -286,9 +334,9 @@ class CaseRef(BaseModel):
 
 
 @app.post("/api/resolve")
-def resolve_case(payload: CaseRef):
+def resolve_case(payload: CaseRef, request: Request):
     """The refusal lives here. Pure function, no LLM. STATE: RESOLVING."""
-    case = _case_or_404(payload.case_id)
+    case = _owned_case(payload.case_id, request)
     verdict = verdict_for(case)
     store.save_deadlines(payload.case_id, verdict.deadlines)
 
@@ -309,14 +357,14 @@ class DraftRequest(BaseModel):
 
 
 @app.post("/api/draft")
-def draft(payload: DraftRequest):
+def draft(payload: DraftRequest, request: Request):
     """template -> 105B -> validate_citations -> Mayura -> PDF. STATE: DRAFTING.
 
     The refusal is ENFORCED here, not merely reported by /api/resolve. A blocked case
     that still walks away with a filable PDF is the product's central claim broken —
     and /api/resolve is advisory, so nothing stopped a client from skipping it.
     """
-    case = _case_or_404(payload.case_id)
+    case = _owned_case(payload.case_id, request)
     verdict = verdict_for(case)
 
     if not verdict.maintainable:
@@ -369,12 +417,13 @@ def draft(payload: DraftRequest):
 
 
 @app.post("/api/document")
-def upload_document(document: UploadFile = File(...), case_id: str = Form(...)):
+def upload_document(request: Request, document: UploadFile = File(...),
+                    case_id: str = Form(...)):
     """Read a bank letter or RTI reply with Sarvam Doc AI and merge what it says
     into the fact sheet — but only the fields it is confident about. Anything
     below the threshold comes back for the user to confirm, because a wrong date
     here silently changes which tier a complaint is maintainable at."""
-    case = _case_or_404(case_id)
+    case = _owned_case(case_id, request)
     raw = document.file.read()
 
     try:
@@ -402,7 +451,10 @@ def upload_document(document: UploadFile = File(...), case_id: str = Form(...)):
 
 
 @app.get("/api/draft/{case_id}.pdf")
-def draft_pdf(case_id: str):
+def draft_pdf(case_id: str, request: Request):
+    """The filing itself. _owned_case validates the id shape before it is ever
+    joined onto a filesystem path."""
+    _owned_case(case_id, request)
     path = drafting.PDF_DIR / f"{case_id}.pdf"
     if not path.exists():
         raise HTTPException(status_code=404, detail="draft not generated yet")
@@ -413,24 +465,24 @@ def draft_pdf(case_id: str):
 
 
 class Speak(BaseModel):
+    # case_id is required: without it this endpoint was an unauthenticated
+    # text-to-speech proxy anyone could point at our Sarvam quota.
     text: str
-    case_id: str | None = None
+    case_id: str
     lang: str | None = None
     speaker: str = "ritu"
 
 
 @app.post("/api/speak")
-def speak(payload: Speak):
+def speak(payload: Speak, request: Request):
     """Bulbul reads the English draft aloud in her language. She approves a document
     she cannot read, by hearing it in one she can.
 
     The language comes from the case, not from the caller. Hardcoding it here is how
     a Hindi speaker ends up being read to in Marathi.
     """
-    language = payload.lang
-    if not language and payload.case_id:
-        language = _case_or_404(payload.case_id).get("language")
-    language = language or "en-IN"
+    case = _owned_case(payload.case_id, request)
+    language = payload.lang or case.get("language") or "en-IN"
 
     if not onboarding.is_supported(language):
         raise HTTPException(
@@ -447,10 +499,10 @@ class Approve(BaseModel):
 
 
 @app.post("/api/approve")
-def approve(payload: Approve):
+def approve(payload: Approve, request: Request):
     """We never file autonomously. Every outbound document needs a recorded human
     approval — this endpoint is that record (Q&A answer 3)."""
-    _case_or_404(payload.case_id)
+    _owned_case(payload.case_id, request)
     from datetime import datetime
 
     stamp = datetime.utcnow().isoformat(timespec="seconds")
@@ -468,14 +520,14 @@ class Advance(BaseModel):
 
 
 @app.post("/api/advance")
-def advance(payload: Advance):
+def advance(payload: Advance, request: Request):
     """The time machine. Nobody clicked anything — silence became a legal event.
     STATE: WATCHING."""
-    case = _case_or_404(payload.case_id)
+    case = _owned_case(payload.case_id, request)
     offset = (case.get("clock_offset_days") or 0) + payload.days
     store.update_case(payload.case_id, clock_offset_days=offset)
 
-    case = _case_or_404(payload.case_id)
+    case = _owned_case(payload.case_id, request)
     today = _today_for(case)
 
     verdict = verdict_for(case)
@@ -503,11 +555,12 @@ def advance(payload: Advance):
 
 
 @app.get("/api/case/{case_id}")
-def get_case(case_id: str):
-    case = _case_or_404(case_id)
+def get_case(case_id: str, request: Request):
+    case = _owned_case(case_id, request)
     verdict = verdict_for(case)
     return {
-        "case": {k: v for k, v in case.items() if k != "facts"},
+        # owner_token is a credential, not case data. It must never leave the server.
+        "case": {k: v for k, v in case.items() if k not in ("facts", "owner_token")},
         "facts": case["facts"],
         "messages": store.messages(case_id),
         "deadlines": store.all_deadlines(case_id),

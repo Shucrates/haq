@@ -16,6 +16,7 @@ import main
 import store
 
 TODAY = date.today()
+TOKEN = "test-session-token"
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +28,10 @@ def temp_paths(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client():
-    return TestClient(main.app)
+    """A browser that already holds the session every _case() below belongs to."""
+    c = TestClient(main.app)
+    c.cookies.set(main.COOKIE_NAME, TOKEN)
+    return c
 
 
 def _case(**facts) -> str:
@@ -42,7 +46,7 @@ def _case(**facts) -> str:
         "institution": "Bank of Maharashtra",
     }
     base.update(facts)
-    case_id = store.create_case(channel="web")
+    case_id = store.create_case(channel="web", owner_token=TOKEN)
     store.update_case(
         case_id,
         language="en-IN",
