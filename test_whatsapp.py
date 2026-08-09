@@ -185,3 +185,32 @@ def test_button_tap_does_not_get_recorded_as_a_fact(drafted, sent, monkeypatch):
 
     assert called == [], "a decision must not reach the fact collector"
     assert store.get_case(drafted)["approved_at"]
+
+
+# ------------------------------------------------- debug echo (off by default)
+
+
+def test_document_failure_hides_the_error_by_default(monkeypatch, sent):
+    """A user must never be shown a stack trace."""
+    monkeypatch.delenv("HAQ_DEBUG", raising=False)
+    monkeypatch.setattr(whatsapp, "download_media",
+                        lambda mid: (_ for _ in ()).throw(RuntimeError("Sarvam 422: boom")))
+    case_id = store.case_for_phone("91666")
+
+    whatsapp._handle_document("91666", case_id, {"media_id": "m", "filename": "x.pdf"}, "en-IN")
+
+    assert "422" not in sent[-1][2]
+    assert "couldn't read that" in sent[-1][2]
+
+
+def test_debug_flag_surfaces_the_real_error(monkeypatch, sent):
+    """The whole point: a misconfigured deployment must be distinguishable from a
+    blurry photo by the person holding the phone."""
+    monkeypatch.setenv("HAQ_DEBUG", "1")
+    monkeypatch.setattr(whatsapp, "download_media",
+                        lambda mid: (_ for _ in ()).throw(RuntimeError("Sarvam 422: boom")))
+    case_id = store.case_for_phone("91667")
+
+    whatsapp._handle_document("91667", case_id, {"media_id": "m", "filename": "x.pdf"}, "en-IN")
+
+    assert "Sarvam 422: boom" in sent[-1][2]

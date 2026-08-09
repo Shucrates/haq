@@ -212,6 +212,20 @@ def handle_inbound(value: dict, message: dict) -> None:
         log.exception("whatsapp_inbound_failed: %s", exc)
 
 
+def _debug(exc: Exception) -> str:
+    """Echo the real error to the chat when HAQ_DEBUG=1.
+
+    Off by default: users must never see a stack trace, and the surrounding handlers
+    deliberately swallow failures so one bad scan cannot close a case. But that same
+    silence makes a misconfigured deployment indistinguishable from a blurry photo,
+    and the logs are not always where the person testing is looking. Read at call
+    time so it can be toggled without a code change.
+    """
+    if os.getenv("HAQ_DEBUG") != "1":
+        return ""
+    return f"\n\n_debug: {str(exc)[:500]}_"
+
+
 def _handle_document(phone: str, case_id: str, inbound: dict, language: str | None) -> None:
     """Read a letter the user sent. Doc AI is slow, so tell them it's happening —
     silence after sending a document reads as the bot being broken."""
@@ -223,7 +237,7 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
     except Exception as exc:  # noqa: BLE001 — a bad scan must not close the case
         log.warning("document_failed: %s", exc)
         store.save_document(case_id, inbound.get("filename"), "failed", {"error": str(exc)})
-        send_text(phone, "I couldn't read that. Just tell me the details instead.")
+        send_text(phone, "I couldn't read that. Just tell me the details instead." + _debug(exc))
         return
 
     split = documents.to_facts(extracted)
