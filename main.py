@@ -11,6 +11,7 @@ import base64
 import os
 import re
 import secrets
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -63,6 +64,51 @@ def _set_session_cookie(response, token: str, request: Request) -> None:
         secure=request.url.scheme == "https",
         max_age=COOKIE_MAX_AGE,
     )
+
+
+# ------------------------------------------- limits on the paths that cost money
+#
+# /api/intake, /api/document and /api/speak each hand a request straight to a paid
+# third-party API. Unbounded, they are somebody else's budget and our memory.
+
+MAX_AUDIO_BYTES = 8 * 1024 * 1024
+MAX_DOC_BYTES = 10 * 1024 * 1024
+MAX_SPEAK_CHARS = 4000
+
+# MediaRecorder hands back audio/webm; some browsers label the same container video/webm.
+AUDIO_TYPES = ("audio/", "video/webm")
+DOC_TYPES = ("application/pdf", "image/jpeg", "image/jpg", "image/png")
+
+RATE_LIMIT = 20
+RATE_WINDOW_SECONDS = 60
+# ponytail: in-process counter, so it only holds for a single worker. Move to Redis
+# if this ever runs on more than one replica.
+_hits: dict[str, list[float]] = {}
+
+
+def _rate_limit(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    if len(_hits) > 1000:  # keep a long-running process from accumulating dead IPs
+        _hits.clear()
+    recent = [t for t in _hits.get(ip, []) if now - t < RATE_WINDOW_SECONDS]
+    if len(recent) >= RATE_LIMIT:
+        _hits[ip] = recent
+        raise HTTPException(status_code=429, detail="too many requests; slow down")
+    recent.append(now)
+    _hits[ip] = recent
+
+
+def _read_capped(upload: UploadFile, limit: int, allowed: tuple[str, ...]) -> bytes:
+    """Check the type, then read one byte past the cap. Reading the whole upload and
+    measuring it afterwards is how a 2 GB POST becomes 2 GB of resident memory."""
+    kind = (upload.content_type or "").split(";")[0].strip().lower()
+    if not kind.startswith(allowed):
+        raise HTTPException(status_code=415, detail=f"unsupported content type {kind or 'unknown'}")
+    raw = upload.file.read(limit + 1)
+    if len(raw) > limit:
+        raise HTTPException(status_code=413, detail=f"file exceeds {limit // (1024 * 1024)} MB")
+    return raw
 
 
 def _owned_case(case_id: str, request: Request) -> dict:
@@ -163,13 +209,14 @@ def intake(request: Request, response: Response, audio: UploadFile = File(...),
     The chosen language wins; Saaras' detection is kept as a cross-check and
     surfaced when the two disagree, rather than silently overriding the choice.
     """
+    _rate_limit(request)
     token = _session_token(request)
     _set_session_cookie(response, token, request)
 
     case = _owned_case(case_id, request) if case_id else None
     chosen = (case or {}).get("language")
 
-    raw = audio.file.read()
+    raw = _read_capped(audio, MAX_AUDIO_BYTES, AUDIO_TYPES)
     heard = sarvam.stt(
         raw,
         filename=audio.filename or "audio.webm",
@@ -423,8 +470,9 @@ def upload_document(request: Request, document: UploadFile = File(...),
     into the fact sheet — but only the fields it is confident about. Anything
     below the threshold comes back for the user to confirm, because a wrong date
     here silently changes which tier a complaint is maintainable at."""
+    _rate_limit(request)
     case = _owned_case(case_id, request)
-    raw = document.file.read()
+    raw = _read_capped(document, MAX_DOC_BYTES, DOC_TYPES)
 
     try:
         extracted = documents.extract(raw, document.filename or "document.pdf",
@@ -481,8 +529,15 @@ def speak(payload: Speak, request: Request):
     The language comes from the case, not from the caller. Hardcoding it here is how
     a Hindi speaker ends up being read to in Marathi.
     """
+    _rate_limit(request)
     case = _owned_case(payload.case_id, request)
     language = payload.lang or case.get("language") or "en-IN"
+
+    if len(payload.text) > MAX_SPEAK_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"text exceeds {MAX_SPEAK_CHARS} characters",
+        )
 
     if not onboarding.is_supported(language):
         raise HTTPException(
