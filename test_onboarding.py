@@ -159,6 +159,72 @@ def test_voice_note_before_onboarding_is_not_transcribed(sent, monkeypatch):
     assert sent[-1][0] == "list"
 
 
+@pytest.mark.parametrize(
+    "text", ["hi", "Hii", "heyy", "HELLO", "hello!", " hey ", "namaste", "नमस्कार"],
+)
+def test_bare_greetings_are_greetings(text):
+    assert onboarding.is_greeting(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [onboarding.PREFILL_TEXT, "hi my bank charged me", "", None, "reset",
+     "बँकेने पैसे कापले"],
+)
+def test_real_messages_are_not_greetings(text):
+    assert not onboarding.is_greeting(text)
+
+
+def test_greeting_reopens_the_picker_instead_of_refusing(sent, monkeypatch):
+    """The bug this guards: "hi" was classified as a grievance, matched no ladder,
+    and the person's hello was answered with `no_ladder_for_grievance`."""
+    advanced = []
+    monkeypatch.setattr(whatsapp, "_advance_case", lambda *a: advanced.append(a))
+
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m1", "type": "text", "text": {"body": "hi"}},
+    )
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m2", "type": "interactive",
+             "interactive": {"type": "list_reply",
+                             "list_reply": {"id": "lang_mr-IN", "title": "मराठी"}}},
+    )
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m3", "type": "text", "text": {"body": "Heyy"}},
+    )
+
+    assert advanced == [], "a greeting is never a grievance"
+    assert sent[-1][0] == "list", "a greeting re-offers the language picker"
+
+
+def test_repicking_a_language_is_not_read_as_a_grievance(sent, monkeypatch):
+    """The picker can be re-shown after a language exists, so the row tap must still
+    route to onboarding — otherwise the row title becomes the complaint."""
+    advanced = []
+    monkeypatch.setattr(whatsapp, "_advance_case", lambda *a: advanced.append(a))
+
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m1", "type": "text", "text": {"body": "hi"}},
+    )
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m2", "type": "interactive",
+             "interactive": {"type": "list_reply",
+                             "list_reply": {"id": "lang_mr-IN", "title": "मराठी"}}},
+    )
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m3", "type": "text", "text": {"body": "hi"}},
+    )
+    whatsapp.handle_inbound(
+        {}, {"from": "9111", "id": "m4", "type": "interactive",
+             "interactive": {"type": "list_reply",
+                             "list_reply": {"id": "lang_hi-IN", "title": "हिंदी"}}},
+    )
+
+    assert advanced == []
+    assert store.get_case(store.case_for_phone("9111"))["language"] == "hi-IN"
+    assert sent[-1][2] == onboarding.GREETINGS["hi-IN"]
+
+
 def test_reset_returns_to_onboarding(sent):
     whatsapp.handle_inbound(
         {}, {"from": "9111", "id": "m1", "type": "text", "text": {"body": "hi"}},

@@ -178,10 +178,20 @@ def handle_inbound(value: dict, message: dict) -> None:
             _handle_language(phone, case_id, None)  # a reset returns to onboarding
             return
 
+        # A bare "hi" is an opener, not a complaint. Without this it gets classified,
+        # lands in `other`, matches no ladder, and the person is answered with a
+        # refusal. Only before a grievance exists — mid-case, "hi" is an answer.
+        if onboarding.is_greeting(text) and not case.get("grievance_class"):
+            _handle_language(phone, case_id, None)
+            return
+
         # Onboarding first. A grievance interrogated in the wrong language is worse
         # than a slow one, and this must run BEFORE any media is transcribed —
         # otherwise a voice note's detected language silently overrides the choice.
-        if not case.get("language"):
+        # A language row is also routed here once a language is already set, because
+        # the picker can be re-shown by a greeting; otherwise the tap's title text
+        # ("हिंदी") would fall through and be classified as the grievance.
+        if not case.get("language") or (action or "").startswith(onboarding.LANG_PREFIX):
             _handle_language(phone, case_id, action)
             return
 

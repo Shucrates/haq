@@ -11,6 +11,7 @@ the extra eleven stay available for transcription, they are just not on this men
 
 from __future__ import annotations
 
+import re
 import urllib.parse
 from dataclasses import dataclass
 
@@ -67,6 +68,33 @@ GREETINGS = {
 
 # Shown above the language list. Bilingual so it reads to anyone.
 PICKER_PROMPT = "Choose your language / भाषा निवडा"
+
+# A bare hello is how most people open a chat, and it is not a grievance. Repeated
+# letters are squeezed before matching, so "hii" and "heyyy" need no entry here.
+_SQUEEZE = re.compile(r"(.)\1+")
+_GREETING_WORDS = {
+    _SQUEEZE.sub(r"\1", word)
+    for word in (
+        "hi", "hey", "hello", "hlo", "yo", "start", "hola",
+        "namaste", "namaskar", "namaskaar", "salaam", "vanakkam",
+        "नमस्ते", "नमस्कार", "हाय", "हॅलो", "हैलो", "வணக்கம்", "నమస్కారం",
+    )
+}
+# Trailing decoration people add to a greeting. Kept off the Devanagari danda and
+# other marks that only ever appear inside real words.
+_GREETING_TRIM = " \t!.,?;:'\"…-~*"
+
+
+def is_greeting(text: str | None) -> bool:
+    """True only for a bare hello — one word and nothing else.
+
+    Single-word is the whole guard: PREFILL_TEXT starts with "Hi" but goes on to
+    describe a complaint, and that must still reach the interrogation.
+    """
+    word = (text or "").strip().lower().strip(_GREETING_TRIM)
+    if not word or any(ch.isspace() for ch in word):
+        return False
+    return _SQUEEZE.sub(r"\1", word) in _GREETING_WORDS
 
 
 def by_code(code: str | None) -> Language | None:
