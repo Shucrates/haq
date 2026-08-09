@@ -18,6 +18,7 @@ import json
 import re
 from datetime import date, datetime
 
+import onboarding
 import sarvam
 import store
 
@@ -73,6 +74,7 @@ some facts and need exactly ONE more.
 
 Ask a single short question, in the person's language, for the fact named below.
 Rules: one question only, under 25 words, no preamble, no explanation, no lists.
+Write it in that language's own script — never transliterated into Latin letters.
 Reply with ONLY the question text."""
 
 REFUSAL_PROMPT = """Explain, kindly and in under 45 words, why this complaint cannot be filed
@@ -92,16 +94,11 @@ def _first_json(text: str) -> dict:
 
 
 def _language_name(code: str | None) -> str:
-    return {
-        "mr-IN": "Marathi",
-        "hi-IN": "Hindi",
-        "en-IN": "English",
-        "bn-IN": "Bengali",
-        "ta-IN": "Tamil",
-        "te-IN": "Telugu",
-        "kn-IN": "Kannada",
-        "gu-IN": "Gujarati",
-    }.get(code or "", "the same language as the user")
+    """Read off the offered list rather than a second copy of it — a local map went
+    stale the moment onboarding added Malayalam, Punjabi and Odia, and the only
+    symptom was those three quietly getting their questions in English."""
+    language = onboarding.by_code(code)
+    return language.english if language else "the same language as the user"
 
 
 # --------------------------------------------------------------- classify

@@ -13,6 +13,7 @@ Everything is wrapped in demo_cache.cached() so the demo can run with the wifi o
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 from typing import Any
@@ -20,6 +21,8 @@ from typing import Any
 import httpx
 
 from demo_cache import cached, key_for
+
+log = logging.getLogger("haq.sarvam")
 
 BASE_URL = "https://api.sarvam.ai"
 TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -37,6 +40,21 @@ TTS_MAX_CHARS = 2500
 MAYURA_MAX_CHARS = 1000
 
 CHAT_SEED = 20260808  # fixed so replays and reruns look the same
+
+# sarvam-105b is a reasoning model and max_tokens covers the reasoning trace as well
+# as the answer, so a caller asking for an 80-token question got 80 tokens of
+# thinking, finish_reason='length' and content=null — a silent fall back to English
+# on every single call. `reasoning_effort` has no off switch ('low' is the floor,
+# and low still spent 1015-1690 tokens across a sample of one-line questions), so
+# the budget is added instead: callers size max_tokens for the ANSWER and this
+# covers the thinking. A cap is not an allocation — an answer that needs less costs
+# less, so the headroom is set well above the worst case measured.
+REASONING_BUDGET = 3000
+
+# Starter tier rejects max_tokens above this outright ("exceeds the maximum allowed
+# for sarvam-105b for your subscription tier"), so the budget is clamped rather than
+# turning a long-answer caller into a 400.
+MAX_COMPLETION_TOKENS = 4096
 
 
 def _key() -> str:
@@ -111,7 +129,7 @@ def chat(messages: list[dict], *, max_tokens: int = 512, reasoning_effort: str =
         "model": CHAT_MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": max_tokens,
+        "max_tokens": min(max_tokens + REASONING_BUDGET, MAX_COMPLETION_TOKENS),
         "reasoning_effort": reasoning_effort,
         "wiki_grounding": False,
         "seed": CHAT_SEED,
@@ -122,7 +140,16 @@ def chat(messages: list[dict], *, max_tokens: int = 512, reasoning_effort: str =
         return _post("/v1/chat/completions", bearer=True, json=payload)
 
     out = cached("chat", key_for(payload), call)
-    return out["choices"][0]["message"]["content"] or ""
+    choice = out["choices"][0]
+    content = choice["message"].get("content") or ""
+
+    # Every caller of this function falls back to English on an empty answer, so an
+    # empty answer must never be silent — that is what made the reasoning-budget bug
+    # look like a working bot that just would not speak Marathi.
+    if not content:
+        log.warning("sarvam_chat_empty finish_reason=%s usage=%s",
+                    choice.get("finish_reason"), out.get("usage"))
+    return content
 
 
 # ------------------------------------------------------- C4: formal English out
