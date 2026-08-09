@@ -248,6 +248,31 @@ def _debug(exc: Exception) -> str:
     return f"\n\n_debug: {str(exc)[:500]}_"
 
 
+# Three different things go wrong when a document does not come back, and telling
+# someone her photo is unreadable when the real answer is "that agreement is 301
+# pages" sends her off to retake a photo that was fine.
+DOC_UNREADABLE = "I couldn't read that. Just tell me the details instead."
+DOC_TOO_LONG = (
+    "That document is too long for me to read in one go. Send just the pages that "
+    "matter — the first page, and the page about your problem."
+)
+DOC_TIMED_OUT = (
+    "That document is taking longer than usual to read. Send it again, or just tell "
+    "me the details."
+)
+
+
+def _document_problem(exc: Exception) -> str:
+    """Which of the three it was. DOCUMENT_TOO_LARGE is Doc AI's own error `code`,
+    matched on the string because _post() raises one RuntimeError carrying the body
+    and typing the whole Sarvam client to catch one case is not worth it."""
+    if isinstance(exc, TimeoutError):
+        return DOC_TIMED_OUT
+    if "DOCUMENT_TOO_LARGE" in str(exc):
+        return DOC_TOO_LONG
+    return DOC_UNREADABLE
+
+
 def _handle_document(phone: str, case_id: str, inbound: dict, language: str | None) -> None:
     """Read a letter the user sent. Doc AI is slow, so tell them it's happening —
     silence after sending a document reads as the bot being broken."""
@@ -261,11 +286,7 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
         store.save_document(case_id, inbound.get("filename"), "failed", {"error": str(exc)})
         # The debug tail is appended AFTER localisation — it is a stack trace for us,
         # not a sentence for her, and translating it would only make it useless.
-        send_text(
-            phone,
-            agent.localise("I couldn't read that. Just tell me the details instead.", language)
-            + _debug(exc),
-        )
+        send_text(phone, agent.localise(_document_problem(exc), language) + _debug(exc))
         return
 
     split = documents.to_facts(extracted)

@@ -28,8 +28,19 @@ from demo_cache import cached, key_for
 CONFIDENCE_THRESHOLD = 0.75
 
 TERMINAL = {"completed", "partially_completed", "failed", "rejected"}
-POLL_TIMEOUT_SECONDS = 60
+
+# Measured against real loan paperwork, which is what people actually send:
+# 1 page 8s, 8 pages 20-31s, 44 pages 82s. At 60s a 44-page loan agreement timed
+# out and the user was told her document could not be read — it was being read.
+# Doc AI rejects anything over 60 pages outright, so the ceiling is roughly 112s;
+# this is that plus margin. Nothing waits on it but the person, and she has already
+# been told the document is being read: handle_inbound runs after the 200, so Meta
+# is not holding the connection open.
+POLL_TIMEOUT_SECONDS = 180
 POLL_INTERVAL_SECONDS = 2.0
+
+# Doc AI's own limit, quoted back in the 400 body as DOCUMENT_TOO_LARGE.
+MAX_PAGES = 60
 
 # Every field needs a non-empty description — the API rejects the schema otherwise.
 EXTRACT_SCHEMA: dict[str, Any] = {

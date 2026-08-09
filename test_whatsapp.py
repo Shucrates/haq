@@ -12,6 +12,7 @@ import json
 import pytest
 
 import agent
+import documents
 import store
 import whatsapp
 
@@ -188,6 +189,25 @@ def test_ambiguous_reply_re_asks_instead_of_approving(drafted, sent):
     whatsapp._handle_decision("91555", drafted, None, "hmm not sure")
     assert store.get_case(drafted)["approved_at"] is None
     assert sent[-1][0] == "buttons"
+
+
+@pytest.mark.parametrize("exc,expected", [
+    (TimeoutError("Doc AI job 019f still pending after 180s"), whatsapp.DOC_TIMED_OUT),
+    (RuntimeError('{"code":"DOCUMENT_TOO_LARGE","message":"a document has 301 pages"}'),
+     whatsapp.DOC_TOO_LONG),
+    (RuntimeError("Sarvam /doc-ai/v1/job/extract -> 422: invalid file format"),
+     whatsapp.DOC_UNREADABLE),
+])
+def test_each_document_failure_says_what_actually_went_wrong(exc, expected):
+    """Telling someone her photo is unreadable when the real answer is "that
+    agreement is 301 pages" sends her off to retake a photo that was fine."""
+    assert whatsapp._document_problem(exc) == expected
+
+
+def test_the_poll_window_outlasts_a_real_loan_agreement():
+    """Measured: 44 pages took 82s and Doc AI's own cap is 60 pages, so a legitimate
+    loan agreement was timing out and being reported as unreadable."""
+    assert documents.POLL_TIMEOUT_SECONDS >= 120
 
 
 def test_a_question_is_answered_not_interrogated(sent, monkeypatch):
