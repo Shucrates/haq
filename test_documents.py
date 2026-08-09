@@ -97,3 +97,40 @@ def test_summarise_reports_what_it_found():
 def test_failed_job_yields_no_facts():
     out = documents.to_facts(extraction({}, {}, status="failed"))
     assert out["facts"] == {} and out["confirm"] == []
+
+
+# --------------------------------------------- the fact sheet must not be clobbered
+
+
+def test_a_later_message_does_not_erase_what_the_document_read(tmp_path, monkeypatch):
+    """The bug this pins: Doc AI read the letter correctly, then the user's next
+    message replaced the whole fact sheet with {} and every extracted field vanished.
+    From the outside that is indistinguishable from "it cannot read my documents"."""
+    import store
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "t.db")
+    store.init()
+
+    case_id = store.create_case(owner_token="t")
+    store.merge_facts(case_id, {"institution": "State Bank of Maharashtra",
+                                "amount_inr": 9840,
+                                "last_communication_on": "2026-06-25"})
+
+    # what the intake paths now do on first contact
+    store.merge_facts(case_id, {"institution": None})
+
+    facts = store.get_case(case_id)["facts"]
+    assert facts["last_communication_on"] == "2026-06-25", "document facts were erased"
+    assert facts["amount_inr"] == 9840
+    assert facts["institution"] == "State Bank of Maharashtra", "None must not overwrite"
+
+
+def test_merge_facts_still_updates_a_known_field(tmp_path, monkeypatch):
+    import store
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "t2.db")
+    store.init()
+    case_id = store.create_case(owner_token="t")
+
+    store.merge_facts(case_id, {"institution": "Old Bank"})
+    store.merge_facts(case_id, {"institution": "New Bank"})
+
+    assert store.get_case(case_id)["facts"]["institution"] == "New Bank"

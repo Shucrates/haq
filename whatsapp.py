@@ -245,8 +245,7 @@ def _handle_document(phone: str, case_id: str, inbound: dict, language: str | No
                         extracted.get("status", "unknown"), split["raw"])
 
     if split["facts"]:
-        case = store.get_case(case_id)
-        store.update_case(case_id, facts={**case["facts"], **split["facts"]})
+        store.merge_facts(case_id, split["facts"])
         store.add_event(case_id, "document", ", ".join(split["facts"]))
 
     lines = [documents.summarise(extracted)]
@@ -357,8 +356,10 @@ def _advance_case(phone: str, text: str) -> None:
             case_id,
             transcript=text,
             grievance_class=classified["grievance_class"],
-            facts={"institution": classified["institution"]} if classified.get("institution") else {},
         )
+        # merge, never replace: a document sent before the description already put
+        # institution, amount and dates on this fact sheet.
+        store.merge_facts(case_id, {"institution": classified.get("institution")})
         store.add_message(case_id, "user", text)
     else:
         pending = agent.pending_facts(case["facts"], main.required_facts_for(case))

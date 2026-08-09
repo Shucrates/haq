@@ -161,6 +161,22 @@ def update_case(case_id: str, **fields: Any) -> None:
         conn.execute(f"UPDATE cases SET {columns} WHERE id = ?", (*fields.values(), case_id))
 
 
+def merge_facts(case_id: str, new_facts: dict) -> dict:
+    """Add to the fact sheet without discarding what is already on it.
+
+    update_case(facts=...) replaces the whole JSON blob, so a caller holding only
+    the fact it just learned silently destroys every other one. That is how a
+    document read correctly by Doc AI vanishes the moment the user sends their next
+    message. Only write facts through here.
+    """
+    case = get_case(case_id)
+    if case is None:
+        return {}
+    merged = {**case["facts"], **{k: v for k, v in new_facts.items() if v is not None}}
+    update_case(case_id, facts=merged)
+    return merged
+
+
 def bump_turns(case_id: str) -> int:
     with connect() as conn:
         conn.execute("UPDATE cases SET turns = turns + 1 WHERE id = ?", (case_id,))

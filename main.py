@@ -228,18 +228,14 @@ def intake(request: Request, response: Response, audio: UploadFile = File(...),
 
     classified = agent.classify(heard["transcript"])
 
-    facts = {}
-    if classified.get("institution"):
-        facts["institution"] = classified["institution"]
-
     language = chosen or heard["language_code"]
     store.update_case(
         case_id,
         transcript=heard["transcript"],
         language=language,
         grievance_class=classified["grievance_class"],
-        facts=facts,
     )
+    store.merge_facts(case_id, {"institution": classified.get("institution")})
     store.add_message(case_id, "user", heard["transcript"])
 
     return {
@@ -296,8 +292,8 @@ def intake_text(payload: TextIntake, request: Request, response: Response):
         transcript=payload.text,
         language=language,
         grievance_class=classified["grievance_class"],
-        facts={"institution": classified["institution"]} if classified.get("institution") else {},
     )
+    store.merge_facts(case_id, {"institution": classified.get("institution")})
     store.add_message(case_id, "user", payload.text)
     return {
         "case_id": case_id,
@@ -480,15 +476,19 @@ def upload_document(request: Request, document: UploadFile = File(...),
                                       case.get("language"))
     except Exception as exc:  # noqa: BLE001 — a bad scan must not close the case
         store.save_document(case_id, document.filename, "failed", {"error": str(exc)})
-        return {"status": "failed", "facts": {}, "confirm": [],
-                "message": "I could not read that document. You can tell me the details instead."}
+        out = {"status": "failed", "facts": {}, "confirm": [],
+               "message": "I could not read that document. You can tell me the details instead."}
+        # Same flag as the WhatsApp handler: the swallowed error is the only thing
+        # that distinguishes a bad scan from a broken deployment.
+        if os.getenv("HAQ_DEBUG") == "1":
+            out["debug"] = str(exc)[:500]
+        return out
 
     split = documents.to_facts(extracted)
     store.save_document(case_id, document.filename, extracted.get("status", "unknown"), split["raw"])
 
     if split["facts"]:
-        facts = {**case["facts"], **split["facts"]}
-        store.update_case(case_id, facts=facts)
+        store.merge_facts(case_id, split["facts"])
         store.add_event(case_id, "document", ", ".join(split["facts"]))
 
     return {
